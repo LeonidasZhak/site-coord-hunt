@@ -27,6 +27,10 @@ edge delineation), the value metric changes and this document should be revisite
   that falls in one). Covariates are extracted at these cells.
 - **Coarse record**: a record with only an admin unit (or similar) location. Its
   candidate cells are the mask cells that fall inside that unit's polygon.
+- **Location ID**: the identifier of the coarse place that records are attributed
+  to (parish, village, facility). In the prototype this is `admin_name`.
+- **Narrowed record**: a coarse record for which the entomologist has marked one
+  or more candidate cells, possibly with weights, without pinning it to one cell.
 - **Novelty of a cell**: how far the covariates of that cell lie outside the
   reference set.
 
@@ -52,8 +56,8 @@ We show both and do not merge them into one score by default. The app uses
 SHAPE as the primary ranking value and MESS (< 0) as the flag for "outside the
 observed range of at least one covariate". We do not use flexsdm's `univar_comb`
 layer: in flexsdm 1.4.2 its codes are the reverse of its help text (checked
-against MESS on the simulated data), so range status is taken from MESS. Both are reported per cell, and the user can
-change which one drives the map and ranking.
+against MESS on the simulated data), so range status is taken from MESS. Both are
+reported per cell, and the modeller can change which one drives the ranking.
 
 ## From cells to records
 
@@ -87,25 +91,72 @@ changes the scores of all other candidates. The app therefore:
 This avoids sending effort to ten adjacent parishes that are all novel in the
 same way.
 
-## App
+## Two views
 
-R Shiny, `leaflet` map at the scale of the entomologist's area of responsibility.
+The same data serves two people with different jobs, so the app is split into two
+views. They share the scoring and storage code but show different things.
 
-| Layer | Content |
-|---|---|
-| Grid | The model mask raster drawn as cell outlines/fill, switchable to show SHAPE or MESS |
-| Located sites | Reference set points/cells, one colour |
-| Coarse records | Admin polygons coloured by chosen value metric, with a ranked table |
+| | Modeller view | Entomologist view |
+|---|---|---|
+| Question | Which records would add the most to the model? | Where did this sample really come from? |
+| Controls | Covariate subset, MESS vs SHAPE, reference set rules, how many locations to prioritise | None of the scoring settings |
+| Sees | Cell and unit scores, environmental-space diagnostics, ranked table, how the ranking shifts as sites are added, the corrections log with source and confidence | A work list for their area of responsibility, location polygons, the model grid, located sites, and the recall aids below |
+| Produces | A prioritised work list of locations | Corrections: one or more cells, with weights, source and confidence |
 
-Interaction to geolocate a record:
+### Entomologist view: no value information
 
-1. Select a coarse record from the table (or click its polygon). Candidate cells
-   are highlighted with their novelty.
-2. Either **click a cell** (record is assigned at model resolution; the cell centre
-   is stored as the point and `method = "cell"`), or **drop a point** and drag it
-   to a precise place (`method = "point"`).
-3. The user records a source and a confidence level, then saves. The record moves to
-   the reference set, scores are recomputed, and the ranking updates.
+Entomologists never see the value of a cell to the model: no novelty colours, no
+SHAPE or MESS numbers, no cell-level ranking. If they could see it, they would be
+drawn, even unconsciously, toward high-value cells, and the location recorded
+would reflect what is useful to the model and not where the sample came from. That
+would bias the very data the model is fitted to. Their only guide to a location is
+what helps them remember it.
+
+The work list is ordered at the level of the location only (that is the purpose of
+the prioritisation) and carries no scores. For each location ID it shows what
+helps recall:
+
+- the **number of records** attributed to it
+- the **time span** of those records as month and year, e.g. "Mar 2018 to Nov
+  2021" ("undated" where there is no date, and year only where only a year is known)
+
+The polygon, the model grid and the already-located sites can be shown for
+orientation. A neutral base map (satellite or terrain) is a recall aid and is fine.
+
+### Marking a location
+
+For a record in the list, the entomologist can:
+
+1. **Click one cell**: the record is located at model resolution (`method = "cell"`).
+2. **Drop and drag a point**: a precise location (`method = "point"`), from which the
+   cell is derived.
+3. **Mark several cells** when unsure: each marked cell is a candidate. Cells
+   can be given a **relative weight** of belief. Weights are chosen from a short
+   ordinal scale (for example low, medium, high), because finer numbers would
+   claim more precision than anyone has. They are normalised to sum to 1 per record,
+   and with no weights all marked cells count equally.
+
+Each save records a source and a confidence level. A new save for the same record
+replaces the earlier one in full; the earlier rows stay in the log.
+
+### What a multi-cell record means for scoring
+
+- **The candidate cells become the marked cells.** A narrowed record is scored over
+  only its marked cells, and `mean_novelty` becomes a weighted mean using the
+  entomologist's weights. `max_novelty` and `range` are taken over marked cells.
+  So marking cells shrinks the polygon-wide uncertainty rather than ignoring it.
+- **Narrowed is not located.** A record with several cells is not added to the
+  reference set by default, because we do not know which cell's environment it
+  represents. The modeller sets the rule for when a narrowed record counts as
+  located (for example, one cell holds at least a chosen share of the weight), and
+  narrowed records below the rule stay on the work list with their reduced candidate set.
+- **The model sees the uncertainty too.** Fitting the model with a record that
+  has several weighted cells is a modelling choice (weighted presences, or
+  averaging over cells) and is outside this repo, but the corrections file
+  provides the cells and weights it needs.
+
+The entomologist sees none of this scoring. They see only that a record is
+located, narrowed or still coarse.
 
 Corrections are never written over the original data; see the next section.
 
@@ -126,23 +177,29 @@ database later.
 | `admin_name` | name of the coarse unit, joined to the polygon layer |
 | `lon`, `lat` | precise coordinates; blank if not yet located |
 | `n_specimens` | optional, count |
-| `date` | optional |
+| `date` | recommended: shown in the entomologist view as month and year; partial dates (year only, or year and month) are accepted |
 
-- `corrections.csv`: append-only log written by the app. One row per
-  geolocation action with `record_id`, `lon`, `lat`, `cell_id`, `method`
-  (`cell` or `point`), `source`, `confidence`, `user`, `timestamp`. The current
-  state of the data is the original `records.csv` with corrections applied, so
-  every edit is auditable and reversible.
+- `corrections.csv`: append-only log written by the app. One row per marked
+  cell, grouped by `action_id` (one save = one action). Columns: `action_id`,
+  `record_id`, `cell_id`, `lon`, `lat`, `weight`, `method` (`cell`, `point` or
+  `cells`), `source`, `confidence`, `user`, `timestamp`. A single cell or point has
+  `weight = 1`. The current state of a record is its latest action; the original
+  `records.csv` is never modified, so every edit is auditable and reversible.
+  **Planned:** the prototype currently writes one row per record with no
+  `action_id` or `weight` and cannot yet mark several cells.
 
-A record counts as **located** when it has coordinates that fall inside a mask
-cell. Names that do not match any polygon are reported, not silently dropped.
+A record counts as **located** when it has one location (a cell or a point) that
+falls inside a mask cell. A record with several marked cells is **narrowed** (see
+"What a multi-cell record means for scoring"). Names that do not match any polygon
+are reported, not silently dropped.
 
 ## Simulated data
 
 The first prototype runs on simulated covariates, admin units and records
 (`data-raw/simulate_data.R`), so the repo needs no private data. The simulation
 deliberately includes a few admin units that cover unusual environmental
-conditions, so the ranking has something to find.
+conditions, so the ranking has something to find. It does not yet include record
+dates, which the entomologist view needs.
 
 ## Open questions
 
@@ -153,7 +210,14 @@ conditions, so the ranking has something to find.
 4. Do records from the same unit and date describe one site, or several?
 5. What is an acceptable georeferencing precision (cell centre vs. point), and does
    the entomologist's own certainty need to feed the model as uncertainty?
-6. If the final model is not niche-based (e.g. a spatial smoother), the value
+6. How does the work list reach the entomologist: a file the modeller publishes,
+   or a live queue that re-ranks itself as sites are located? Are the two views
+   separate apps or one app with a role switch?
+7. Should entomologists see the already-located sites? They help recall, but they
+   also show where coverage exists.
+8. What rule should count a narrowed record as located (share of weight on one cell,
+   number of marked cells)? Should weights be three levels or five?
+9. If the final model is not niche-based (e.g. a spatial smoother), the value
    metric needs to change (see "Assumed model objective").
 
 ## References

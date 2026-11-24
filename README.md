@@ -8,6 +8,20 @@ coarse records by how much environmental novelty they would add to the set of
 precisely located sites (MESS and SHAPE), and lets an entomologist geolocate them
 by clicking a cell or dragging a point.
 
+The concept has two views (see DESIGN.md, "Two views"):
+
+- **Modeller view**: scoring settings, cell and unit scores, and the prioritised
+  work list.
+- **Entomologist view**: the work list and the geolocation tools, with no value
+  information, so that the location they record is not drawn toward cells that are
+  useful to the model. It shows the number of records and the month-and-year time
+  span for each location to help recall, and lets the entomologist mark several
+  cells with relative weights when unsure.
+
+The current prototype is a single combined app that shows value scores to
+everyone and places one cell or point per record. The two-view split, date
+display and multi-cell weighting are designed but not built.
+
 Read [DESIGN.md](DESIGN.md) first: it sets out the objective, metrics, data
 format and open questions for modellers and entomologists to discuss.
 
@@ -35,6 +49,7 @@ Rscript tests/test_data_io.R
 
 ## Status
 
-Prototype on simulated data. Not yet done: sequential ("next best") selection,
+Prototype on simulated data. Not yet done: the modeller/entomologist split,
+record dates and the time-span display, multi-cell marking with weights, sequential ("next best") selection,
 restricting candidate cells by habitat, facility/point-radius records,
 multi-user storage. The map's basemap tiles need internet access.
