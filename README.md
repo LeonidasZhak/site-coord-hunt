@@ -3,28 +3,32 @@
 Identifying high-value sites for geolocation.
 
 Surveillance records located only to a parish, village or facility are often
-larger than the model's cell size. This repo holds a Shiny app that ranks those
-coarse records by how much environmental novelty they would add to the set of
-precisely located sites (MESS and SHAPE), and lets an entomologist geolocate them
-by clicking a cell or dragging a point.
+larger than the model's cell size. Re-locating all of them is expensive. This repo
+holds a Shiny app that ranks those coarse records by how much novel environmental
+space a precise location would add to the set of sites already located (MESS and
+SHAPE), and lets an entomologist record the location quickly.
 
-The concept is one app with a role tab and two views (see DESIGN.md, "Two views"):
+## Concept
 
-- **Modeller view**: scoring settings, cell and unit scores, and the prioritised
-  work list.
-- **Entomologist view**: the work list and the geolocation tools, with no value
-  information, so that the location they record is not drawn toward cells that are
-  useful to the model. It shows the number of records and the month-and-year time
-  span for each location to help recall, and lets the entomologist mark several
-  cells, with an even split or manual percentage weights, when unsure; it can also flag
-  an already-located site as possibly wrong.
+One app with a role tab and two views:
 
-The current prototype is a single combined app that shows value scores to
-everyone and places one cell or point per record. The two-view split, date
-display and multi-cell weighting are designed but not built.
+- **Modeller**: scoring settings, cell and unit scores, and the prioritised work
+  list. The modeller also decides which flagged sites to keep in the reference set.
+- **Entomologist**: the work list and the location tools. They see **no value
+  information**, so the location they record is not drawn toward cells that are
+  useful to the model. For each location they see the number of records and the
+  month-and-year time span, to help recall. They also see the sites already located,
+  and can flag one as possibly wrong.
 
-Read [DESIGN.md](DESIGN.md) first: it sets out the objective, metrics, data
-format and open questions for modellers and entomologists to discuss.
+A location can be one cell, a dragged point, or several cells with an even split or
+manual percentage weights when the entomologist is unsure.
+
+The tab is a convenience, not access control.
+
+## Documents
+
+- [DECISIONS.md](DECISIONS.md): what has been decided and why. Start here.
+- [DESIGN.md](DESIGN.md): the detail: metrics, scoring of multi-cell records, data formats and open questions.
 
 ## Run the prototype
 
@@ -50,7 +54,16 @@ Rscript tests/test_data_io.R
 
 ## Status
 
-Prototype on simulated data. Not yet done: the modeller/entomologist split,
-record dates and the time-span display, multi-cell marking with weights, sequential ("next best") selection,
-restricting candidate cells by habitat, facility/point-radius records,
-multi-user storage. The map's basemap tiles need internet access.
+The prototype runs on simulated data. It is currently a single combined view that
+shows value scores to everyone and places one cell or point per record.
+
+| Built | Designed, not built |
+|---|---|
+| MESS and SHAPE scoring against located sites | Role tab and the entomologist view |
+| Per-unit ranking (max, mean, range) | Record dates and the time-span display |
+| Click-a-cell and drag-a-point location | Multi-cell marking with weights |
+| Append-only corrections log | Flagging located sites |
+| Recompute after each save | Sequential "next best" selection |
+| Simulated data and tests | Habitat restriction, facility or point-and-radius records, multi-user storage |
+
+The map's basemap tiles need internet access.

@@ -1,6 +1,7 @@
 # Design: prioritising coarse records for geolocation
 
 Status: draft for discussion between spatial modellers and entomologists.
+The reasons behind each decision are summarised in [DECISIONS.md](DECISIONS.md).
 
 ## Problem
 
@@ -185,7 +186,7 @@ All inputs are plain files so the repo runs without a database. The storage laye
 (`R/data_io.R`) is the only code that touches files, so it can be swapped for a
 database later.
 
-- `mask.tif`: covariate stack (multi-layer GeoTIFF), `NA` = outside the mask. The
+- `covariates.tif`: covariate stack (multi-layer GeoTIFF), `NA` = outside the mask. The
   grid is the cell structure of this raster.
 - `admin.gpkg`: admin polygons with `admin_id` and `admin_name`.
 - `records.csv`: one row per record.
@@ -234,10 +235,10 @@ dates, which the entomologist view needs.
 4. Do records from the same unit and date describe one site, or several?
 5. What is an acceptable georeferencing precision (cell centre vs. point), and does
    the entomologist's own certainty need to feed the model as uncertainty?
-6. How does the work list reach the entomologist: a file the modeller publishes,
-   or a live queue that re-ranks itself as sites are located?
-7. What rule should count a narrowed record as located (share of weight on one cell,
-   number of marked cells)?
+6. The work list is a live queue that re-ranks as sites are located (working
+   default). Is that right, or does the modeller need to publish a fixed list?
+7. A narrowed record counts as located once one cell holds at least 80% of the
+   weight (working default, a placeholder). What share is right?
 8. If the final model is not niche-based (e.g. a spatial smoother), the value
    metric needs to change (see "Assumed model objective").
 
