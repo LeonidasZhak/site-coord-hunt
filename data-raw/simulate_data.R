@@ -79,6 +79,17 @@ nm  <- admin$admin_name[st_intersects(pts, admin, sparse = FALSE) |> apply(1, wh
 records$admin_name[!is.na(records$lon)] <- nm
 records$n_specimens <- sample(1:20, nrow(records), replace = TRUE)
 
+# Dates, with the mix of precision real records have: mostly full dates, some
+# month-only or year-only, a few missing. A separate seed keeps everything above
+# identical to earlier versions of this script.
+set.seed(7)
+d    <- as.Date("2015-01-01") + sample(0:(365 * 9 - 1), nrow(records), replace = TRUE)
+prec <- sample(c("day", "month", "year", "none"), nrow(records), replace = TRUE,
+               prob = c(0.6, 0.25, 0.1, 0.05))
+records$date <- ifelse(prec == "day", format(d),
+                ifelse(prec == "month", format(d, "%Y-%m"),
+                ifelse(prec == "year", format(d, "%Y"), NA_character_)))
+
 # ---- write ------------------------------------------------------------------
 dir.create("data", showWarnings = FALSE)
 writeRaster(cov, "data/covariates.tif", overwrite = TRUE)
