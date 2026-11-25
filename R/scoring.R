@@ -65,34 +65,71 @@ score_cells <- function(covs, ref_xy, min_ref = 8, metric = "mahalanobis") {
   c(mess_raster(covs, ref), shape_raster(covs, ref, metric))
 }
 
-#' Summarise cell scores over each coarse record's admin polygon.
+#' Score each record that is not yet located.
 #'
-#' `admin` : sf polygons with admin_name
-#' `scores`: SpatRaster from score_cells()
-#' `records`: data.frame with record_id, admin_name, located (logical)
-#' Returns one row per admin unit that has unlocated records.
-summarise_units <- function(admin, scores, records) {
-  todo <- records[!records$located, , drop = FALSE]
-  units <- unique(todo$admin_name[!is.na(todo$admin_name)])
-  rows <- lapply(units, function(u) {
-    poly <- admin[admin$admin_name == u, ]
-    if (nrow(poly) == 0) return(NULL)
-    v <- terra::extract(scores, terra::vect(poly), ID = FALSE)
-    v <- v[stats::complete.cases(v), , drop = FALSE]
+#' A coarse record is scored over every mask cell in its admin polygon, all
+#' equally likely. A narrowed record is scored over its marked cells only, with
+#' the entomologist's weights, so marking cells shrinks the uncertainty.
+#' `admin`: sf polygons with admin_name; `scores`: SpatRaster from score_cells();
+#' `states`: list from record_states().
+#' One row per record: n_cells, max_shape, weighted mean_shape, range_shape,
+#' min_mess, and pct_outside (weighted share of cells with MESS < 0).
+record_summary <- function(admin, scores, states) {
+  recs <- states$records
+  todo <- recs[recs$status != "located", , drop = FALSE]
+  poly_vals <- list()                       # one extraction per admin unit
+  unit_vals <- function(u) {
+    if (is.na(u) || !(u %in% admin$admin_name)) return(NULL)
+    if (is.null(poly_vals[[u]])) {
+      poly_vals[[u]] <<- terra::extract(scores, terra::vect(admin[admin$admin_name == u, ]), ID = FALSE)
+    }
+    poly_vals[[u]]
+  }
+  rows <- lapply(seq_len(nrow(todo)), function(k) {
+    r <- todo[k, ]
+    if (r$status == "narrowed") {
+      cc <- states$cells[states$cells$record_id == r$record_id, , drop = FALSE]
+      v <- terra::extract(scores, cc$cell_id); w <- cc$weight
+    } else {
+      v <- unit_vals(r$admin_name); w <- if (is.null(v)) numeric(0) else rep(1, nrow(v))
+    }
+    ok <- if (is.null(v)) logical(0) else stats::complete.cases(v)
+    v <- v[ok, , drop = FALSE]; w <- w[ok]
     n <- nrow(v)
     data.frame(
-      admin_name   = u,
-      n_records    = sum(todo$admin_name == u, na.rm = TRUE),
-      n_cells      = n,
-      max_shape    = if (n) max(v$shape) else NA_real_,
-      mean_shape   = if (n) mean(v$shape) else NA_real_,
-      range_shape  = if (n) diff(range(v$shape)) else NA_real_,
-      min_mess     = if (n) min(v$mess) else NA_real_,
-      pct_outside  = if (n) mean(v$mess < 0) * 100 else NA_real_,
-      stringsAsFactors = FALSE
-    )
+      record_id = r$record_id, admin_name = r$admin_name, status = r$status, n_cells = n,
+      max_shape   = if (n) max(v$shape) else NA_real_,
+      mean_shape  = if (n) sum(w * v$shape) / sum(w) else NA_real_,
+      range_shape = if (n) diff(range(v$shape)) else NA_real_,
+      min_mess    = if (n) min(v$mess) else NA_real_,
+      pct_outside = if (n) sum(w * (v$mess < 0)) / sum(w) * 100 else NA_real_,
+      stringsAsFactors = FALSE)
   })
-  out <- do.call(rbind, rows)
-  if (is.null(out)) return(data.frame())
-  out[order(-out$max_shape), , drop = FALSE]
+  if (length(rows) == 0) return(data.frame())
+  do.call(rbind, rows)
+}
+
+#' Roll record scores up to the location ID (what the work list is ordered by).
+#' A location is as valuable as its most valuable record. `records` is
+#' states$records; the date span covers the location's unlocated records.
+unit_summary <- function(rec_sum, records) {
+  if (nrow(rec_sum) == 0) return(data.frame())
+  rs <- rec_sum[rec_sum$n_cells > 0 & !is.na(rec_sum$admin_name), , drop = FALSE]
+  todo <- records[records$status != "located", , drop = FALSE]
+  rows <- lapply(unique(rs$admin_name), function(u) {
+    x <- rs[rs$admin_name == u, ]
+    data.frame(
+      admin_name  = u,
+      n_records   = nrow(x),
+      n_narrowed  = sum(x$status == "narrowed"),
+      dates       = date_span_label(todo$date[todo$admin_name %in% u]),
+      n_cells     = max(x$n_cells),
+      max_shape   = max(x$max_shape),
+      mean_shape  = mean(x$mean_shape),
+      range_shape = max(x$range_shape),
+      min_mess    = min(x$min_mess),
+      pct_outside = mean(x$pct_outside),
+      stringsAsFactors = FALSE)
+  })
+  do.call(rbind, rows)
 }

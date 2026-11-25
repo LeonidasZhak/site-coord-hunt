@@ -101,7 +101,12 @@ share the scoring and storage code but show different things.
 The tab is a convenience, not access control: anyone can switch to the Modeller tab.
 That is adequate against unconscious drift toward high-value cells, which is the
 concern. If hiding value ever had to be enforced, the entomologist view would need
-a separate deployment.
+a separate deployment. The Entomologist tab is the landing tab, so opening the app
+does not show value information.
+
+The entomologist's work list is ordered by the modeller's scores but carries none.
+If scoring is not possible (for example, too few located sites), the list falls back to
+A to Z so fieldwork is never blocked by a modelling problem.
 
 | | Modeller view | Entomologist view |
 |---|---|---|
@@ -131,25 +136,28 @@ The polygon and the model grid are shown for orientation, and so are the sites
 that are already located. Showing located sites helps recall, and the hope is that
 entomologists notice ones that look wrong. For that to be useful there is a **flag
 as possibly wrong** action on a located site (a note is optional). Flags go to the
-modeller view, which can exclude flagged sites from the reference set until they are
-reviewed, because a misplaced reference site distorts the novelty scores of every
-other candidate. A neutral base map (satellite or terrain) is a recall aid and is fine.
+modeller view. By default flagged sites are left out of the reference set until the
+modeller reviews and dismisses the flag (a setting the modeller can turn off), because
+a misplaced reference site distorts the novelty scores of every other candidate.
+Re-locating a flagged site is not yet supported: the flag only reaches the modeller. A neutral base map (satellite or terrain) is a recall aid and is fine.
 
 ### Marking a location
 
 For a record in the list, the entomologist can:
 
 1. **Click one cell**: the record is located at model resolution (`method = "cell"`).
-2. **Drop and drag a point**: a precise location (`method = "point"`), from which the
-   cell is derived.
+2. **Click to drop a marker and drag it** to the exact spot: a precise location
+   (`method = "point"`), from which the cell is derived.
 3. **Mark several cells** when unsure, then say how belief is spread over them:
    - **Evenly split**: every marked cell counts equally (exactly 1/n, so two cells are
      50/50 and three are one third each). This is also the way to say "somewhere in
      these cells", with no limit on how many.
    - **Manual weights**: the entomologist gives each cell a percentage. The total
-     must be 100, and the interface keeps it so: editing cells makes the last cell
-     take the remainder, so a bad sum never has to be rejected. Whole percentages
-     only, to avoid claiming more precision than anyone has.
+     must be 100, and the interface keeps it so: the last cell takes the remainder,
+     so the sum is always right. The one thing that can still go wrong is the other
+     cells adding up to 100 or more; the interface then says so and blocks saving
+     until every cell has at least 1%. Whole percentages only, to avoid claiming more
+     precision than anyone has.
 
    Clicking one cell is the single-cell case (weight 1). Weights are stored as
    proportions that sum to 1 and shown as percentages, so an even split over three
@@ -166,10 +174,11 @@ replaces the earlier one in full; the earlier rows stay in the log.
   entomologist's weights. `max_novelty` and `range` are taken over marked cells.
   So marking cells shrinks the polygon-wide uncertainty rather than ignoring it.
 - **Narrowed is not located.** A record with several cells is not added to the
-  reference set by default, because we do not know which cell's environment it
-  represents. The modeller sets the rule for when a narrowed record counts as
-  located (for example, one cell holds at least a chosen share of the weight), and
-  narrowed records below the rule stay on the work list with their reduced candidate set.
+  reference set, because we do not know which cell's environment it represents. The
+  modeller sets the rule for when a narrowed record counts as located: one cell
+  holds at least a chosen share of the weight (default 80%, a slider in the modeller
+  view), and that cell is then used as its location. Narrowed records below the rule stay
+  on the work list with their reduced candidate set.
 - **The model sees the uncertainty too.** Fitting the model with a record that
   has several weighted cells is a modelling choice (weighted presences, or
   averaging over cells) and is outside this repo, but the corrections file
@@ -205,13 +214,14 @@ database later.
   action), `weight_mode` (`even` or `manual`), `method` (`cell`, `point` or
   `cells`), `source`, `confidence`, `user`, `timestamp`. A single cell or point has
   `weight = 1`. The current state of a record is its latest action; the original
-  `records.csv` is never modified, so every edit is auditable and reversible.
-  **Planned:** the prototype currently writes one row per record with no
-  `action_id` or `weight` and cannot yet mark several cells.
+  `records.csv` is never modified, so every edit is auditable and reversible. Files
+  written by the first prototype (one row per record, no `action_id` or `weight`)
+  are still read, each row counting as a single-cell action.
 
-- `flags.csv`: append-only log of located sites flagged as possibly wrong:
-  `record_id`, `user`, `timestamp`, `note`. Flags never change a record's location;
-  the modeller decides what to do with them.
+- `flags.csv`: append-only log of flag actions on located sites: `action` (`flag`
+  by an entomologist, `dismiss` by a modeller), `record_id`, `user`, `timestamp`,
+  `note`. A site is currently flagged if its latest action is `flag`. Flags never
+  change a record's location.
 
 A record counts as **located** when it has one location (a cell or a point) that
 falls inside a mask cell. A record with several marked cells is **narrowed** (see
@@ -223,8 +233,9 @@ are reported, not silently dropped.
 The first prototype runs on simulated covariates, admin units and records
 (`data-raw/simulate_data.R`), so the repo needs no private data. The simulation
 deliberately includes a few admin units that cover unusual environmental
-conditions, so the ranking has something to find. It does not yet include record
-dates, which the entomologist view needs.
+conditions, so the ranking has something to find. Record dates are simulated with the
+mix of precision real records have (full dates, month only, year only, and a few
+missing).
 
 ## Open questions
 
@@ -239,7 +250,8 @@ dates, which the entomologist view needs.
    default). Is that right, or does the modeller need to publish a fixed list?
 7. A narrowed record counts as located once one cell holds at least 80% of the
    weight (working default, a placeholder). What share is right?
-8. If the final model is not niche-based (e.g. a spatial smoother), the value
+8. How should a flagged site get re-located? Today a flag only reaches the modeller.
+9. If the final model is not niche-based (e.g. a spatial smoother), the value
    metric needs to change (see "Assumed model objective").
 
 ## References

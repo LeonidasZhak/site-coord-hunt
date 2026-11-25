@@ -32,7 +32,8 @@ The tab is a convenience, not access control.
 
 ## Run the prototype
 
-Needs R with `shiny`, `leaflet`, `terra`, `sf`, `DT` and `flexsdm`.
+Needs R with `shiny`, `leaflet`, `terra`, `sf`, `DT` and `flexsdm`. The app opens on the
+Entomologist tab; switch to Modeller with the tab at the top.
 
 ```r
 source("data-raw/simulate_data.R")  # once; writes simulated data/ files
@@ -42,28 +43,31 @@ shiny::runApp()
 To use real data, put `covariates.tif`, `admin.gpkg` and `records.csv` in a
 folder (formats in DESIGN.md) and run
 `options(sch.data_dir = "path/to/folder"); shiny::runApp()`.
-Geolocations are appended to `corrections.csv` in that folder; the original
-`records.csv` is never modified.
+Geolocations are appended to `corrections.csv` and flags to `flags.csv` in that folder;
+the original `records.csv` is never modified. Dates in `records.csv` may be a full date,
+a month (`2019-04`), a year (`2019`) or blank.
 
 ## Tests
 
 ```bash
+Rscript tests/test_dates.R
 Rscript tests/test_scoring.R
 Rscript tests/test_data_io.R
 ```
 
 ## Status
 
-The prototype runs on simulated data. It is currently a single combined view that
-shows value scores to everyone and places one cell or point per record.
+The prototype runs on simulated data.
 
 | Built | Designed, not built |
 |---|---|
-| MESS and SHAPE scoring against located sites | Role tab and the entomologist view |
-| Per-unit ranking (max, mean, range) | Record dates and the time-span display |
-| Click-a-cell and drag-a-point location | Multi-cell marking with weights |
-| Append-only corrections log | Flagging located sites |
-| Recompute after each save | Sequential "next best" selection |
-| Simulated data and tests | Habitat restriction, facility or point-and-radius records, multi-user storage |
+| Role tab with Modeller and Entomologist views | Limiting each entomologist's list to their own area |
+| MESS and SHAPE scoring against located sites, with a choice of covariates | Sequential "next best" selection |
+| Work list by location with record count and month-and-year span | Re-locating a flagged site |
+| Click a cell, drag a point, or mark several cells (even split or manual percentages) | Habitat restriction of candidate cells |
+| Scoring of narrowed records over their marked cells | Facility or point-and-radius records |
+| Located sites shown to entomologists, flagging, modeller review | Multi-user storage |
+| Append-only corrections and flags logs; recompute after each save | |
+| Simulated data (with dates) and tests | |
 
 The map's basemap tiles need internet access.
