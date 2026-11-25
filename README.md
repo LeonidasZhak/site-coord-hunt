@@ -16,7 +16,7 @@ The concept is one app with a role tab and two views (see DESIGN.md, "Two views"
   information, so that the location they record is not drawn toward cells that are
   useful to the model. It shows the number of records and the month-and-year time
   span for each location to help recall, and lets the entomologist mark several
-  cells and spread a fixed vote budget between them when unsure; it can also flag
+  cells, with an even split or manual percentage weights, when unsure; it can also flag
   an already-located site as possibly wrong.
 
 The current prototype is a single combined app that shows value scores to

@@ -141,16 +141,19 @@ For a record in the list, the entomologist can:
 1. **Click one cell**: the record is located at model resolution (`method = "cell"`).
 2. **Drop and drag a point**: a precise location (`method = "point"`), from which the
    cell is derived.
-3. **Mark several cells** when unsure, and spread a fixed budget of **votes**
-   between them (proposed, total to be confirmed). Clicking one cell puts all the
-   votes on it, which is the single-cell case; the entomologist then moves votes to
-   other marked cells. Every vote must be spent, so a cell's weight is its votes
-   divided by the total. Not-spent votes would carry no information after
-   normalising, and overall doubt is expressed by the separate confidence field.
-   The total is one constant (`VOTES_TOTAL`). 9 splits evenly only three ways
-   or nine ways, so two equally likely cells have to read 5 and 4; 12 splits evenly
-   in 2, 3, 4 and 6. The vote total caps the number of marked cells, so a wider
-   "somewhere in this area" mark needs a separate gesture that is not designed yet.
+3. **Mark several cells** when unsure, then say how belief is spread over them:
+   - **Evenly split**: every marked cell counts equally (exactly 1/n, so two cells are
+     50/50 and three are one third each). This is also the way to say "somewhere in
+     these cells", with no limit on how many.
+   - **Manual weights**: the entomologist gives each cell a percentage. The total
+     must be 100, and the interface keeps it so: editing cells makes the last cell
+     take the remainder, so a bad sum never has to be rejected. Whole percentages
+     only, to avoid claiming more precision than anyone has.
+
+   Clicking one cell is the single-cell case (weight 1). Weights are stored as
+   proportions that sum to 1 and shown as percentages, so an even split over three
+   cells is stored as 1/3 each and not as 33, 33, 33. Overall doubt is expressed by the
+   separate confidence field, not by the weights.
 
 Each save records a source and a confidence level. A new save for the same record
 replaces the earlier one in full; the earlier rows stay in the log.
@@ -197,9 +200,10 @@ database later.
 
 - `corrections.csv`: append-only log written by the app. One row per marked
   cell, grouped by `action_id` (one save = one action). Columns: `action_id`,
-  `record_id`, `cell_id`, `lon`, `lat`, `votes`, `weight` (votes divided by
-  `VOTES_TOTAL`), `method` (`cell`, `point` or `cells`), `source`, `confidence`,
-  `user`, `timestamp`. A single cell or point has `weight = 1`. The current state of a record is its latest action; the original
+  `record_id`, `cell_id`, `lon`, `lat`, `weight` (proportion; sums to 1 per
+  action), `weight_mode` (`even` or `manual`), `method` (`cell`, `point` or
+  `cells`), `source`, `confidence`, `user`, `timestamp`. A single cell or point has
+  `weight = 1`. The current state of a record is its latest action; the original
   `records.csv` is never modified, so every edit is auditable and reversible.
   **Planned:** the prototype currently writes one row per record with no
   `action_id` or `weight` and cannot yet mark several cells.
@@ -232,10 +236,9 @@ dates, which the entomologist view needs.
    the entomologist's own certainty need to feed the model as uncertainty?
 6. How does the work list reach the entomologist: a file the modeller publishes,
    or a live queue that re-ranks itself as sites are located?
-7. What should `VOTES_TOTAL` be (9 or 12), and is a wider-area mark needed?
-8. What rule should count a narrowed record as located (share of weight on one cell,
+7. What rule should count a narrowed record as located (share of weight on one cell,
    number of marked cells)?
-9. If the final model is not niche-based (e.g. a spatial smoother), the value
+8. If the final model is not niche-based (e.g. a spatial smoother), the value
    metric needs to change (see "Assumed model objective").
 
 ## References
