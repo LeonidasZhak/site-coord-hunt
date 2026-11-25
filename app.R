@@ -233,8 +233,11 @@ server <- function(input, output, session) {
     }
   })
 
-  observeEvent(unit_now(), {
-    u <- unit_now(); req(u)
+  # Refit only when the chosen location changes. Keying this on unit_now() would
+  # also refit after every save or flag (scores change, so the reactive re-runs),
+  # throwing away wherever the user had zoomed to.
+  observeEvent(current_unit(), {
+    u <- current_unit(); req(u)
     b <- st_bbox(admin[admin$admin_name == u, ])
     leafletProxy("map_e") |> fitBounds(b[["xmin"]], b[["ymin"]], b[["xmax"]], b[["ymax"]])
   })
@@ -484,9 +487,10 @@ server <- function(input, output, session) {
                 options = list(pageLength = 8, dom = "tp", scrollX = TRUE)) |>
       formatRound(c("max_shape", "mean_shape", "range_shape", "pct_outside"), 1)
   })
-  selected_unit_m <- reactive({
-    i <- input$unit_table_m_rows_selected
-    if (is.null(i)) NULL else units()$admin_name[i]
+  current_unit_m <- reactiveVal(NULL)
+  observeEvent(input$unit_table_m_rows_selected, {
+    i <- input$unit_table_m_rows_selected; u <- units()
+    if (!is.null(i) && i <= nrow(u)) current_unit_m(u$admin_name[i])
   })
 
   output$map_m <- renderLeaflet(base_map())
@@ -542,8 +546,8 @@ server <- function(input, output, session) {
     }
   })
 
-  observeEvent(selected_unit_m(), {
-    u <- selected_unit_m(); req(u)
+  observeEvent(current_unit_m(), {
+    u <- current_unit_m(); req(u)
     b <- st_bbox(admin[admin$admin_name == u, ])
     leafletProxy("map_m") |> fitBounds(b[["xmin"]], b[["ymin"]], b[["xmax"]], b[["ymax"]])
   })
