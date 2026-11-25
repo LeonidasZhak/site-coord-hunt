@@ -93,8 +93,14 @@ same way.
 
 ## Two views
 
-The same data serves two people with different jobs, so the app is split into two
-views. They share the scoring and storage code but show different things.
+The same data serves two people with different jobs, so the app has two views,
+selected by a **role tab** (Modeller / Entomologist) in a single Shiny app. They
+share the scoring and storage code but show different things.
+
+The tab is a convenience, not access control: anyone can switch to the Modeller tab.
+That is adequate against unconscious drift toward high-value cells, which is the
+concern. If hiding value ever had to be enforced, the entomologist view would need
+a separate deployment.
 
 | | Modeller view | Entomologist view |
 |---|---|---|
@@ -120,8 +126,13 @@ helps recall:
 - the **time span** of those records as month and year, e.g. "Mar 2018 to Nov
   2021" ("undated" where there is no date, and year only where only a year is known)
 
-The polygon, the model grid and the already-located sites can be shown for
-orientation. A neutral base map (satellite or terrain) is a recall aid and is fine.
+The polygon and the model grid are shown for orientation, and so are the sites
+that are already located. Showing located sites helps recall, and the hope is that
+entomologists notice ones that look wrong. For that to be useful there is a **flag
+as possibly wrong** action on a located site (a note is optional). Flags go to the
+modeller view, which can exclude flagged sites from the reference set until they are
+reviewed, because a misplaced reference site distorts the novelty scores of every
+other candidate. A neutral base map (satellite or terrain) is a recall aid and is fine.
 
 ### Marking a location
 
@@ -130,11 +141,16 @@ For a record in the list, the entomologist can:
 1. **Click one cell**: the record is located at model resolution (`method = "cell"`).
 2. **Drop and drag a point**: a precise location (`method = "point"`), from which the
    cell is derived.
-3. **Mark several cells** when unsure: each marked cell is a candidate. Cells
-   can be given a **relative weight** of belief. Weights are chosen from a short
-   ordinal scale (for example low, medium, high), because finer numbers would
-   claim more precision than anyone has. They are normalised to sum to 1 per record,
-   and with no weights all marked cells count equally.
+3. **Mark several cells** when unsure, and spread a fixed budget of **votes**
+   between them (proposed, total to be confirmed). Clicking one cell puts all the
+   votes on it, which is the single-cell case; the entomologist then moves votes to
+   other marked cells. Every vote must be spent, so a cell's weight is its votes
+   divided by the total. Not-spent votes would carry no information after
+   normalising, and overall doubt is expressed by the separate confidence field.
+   The total is one constant (`VOTES_TOTAL`). 9 splits evenly only three ways
+   or nine ways, so two equally likely cells have to read 5 and 4; 12 splits evenly
+   in 2, 3, 4 and 6. The vote total caps the number of marked cells, so a wider
+   "somewhere in this area" mark needs a separate gesture that is not designed yet.
 
 Each save records a source and a confidence level. A new save for the same record
 replaces the earlier one in full; the earlier rows stay in the log.
@@ -181,12 +197,16 @@ database later.
 
 - `corrections.csv`: append-only log written by the app. One row per marked
   cell, grouped by `action_id` (one save = one action). Columns: `action_id`,
-  `record_id`, `cell_id`, `lon`, `lat`, `weight`, `method` (`cell`, `point` or
-  `cells`), `source`, `confidence`, `user`, `timestamp`. A single cell or point has
-  `weight = 1`. The current state of a record is its latest action; the original
+  `record_id`, `cell_id`, `lon`, `lat`, `votes`, `weight` (votes divided by
+  `VOTES_TOTAL`), `method` (`cell`, `point` or `cells`), `source`, `confidence`,
+  `user`, `timestamp`. A single cell or point has `weight = 1`. The current state of a record is its latest action; the original
   `records.csv` is never modified, so every edit is auditable and reversible.
   **Planned:** the prototype currently writes one row per record with no
   `action_id` or `weight` and cannot yet mark several cells.
+
+- `flags.csv`: append-only log of located sites flagged as possibly wrong:
+  `record_id`, `user`, `timestamp`, `note`. Flags never change a record's location;
+  the modeller decides what to do with them.
 
 A record counts as **located** when it has one location (a cell or a point) that
 falls inside a mask cell. A record with several marked cells is **narrowed** (see
@@ -211,12 +231,10 @@ dates, which the entomologist view needs.
 5. What is an acceptable georeferencing precision (cell centre vs. point), and does
    the entomologist's own certainty need to feed the model as uncertainty?
 6. How does the work list reach the entomologist: a file the modeller publishes,
-   or a live queue that re-ranks itself as sites are located? Are the two views
-   separate apps or one app with a role switch?
-7. Should entomologists see the already-located sites? They help recall, but they
-   also show where coverage exists.
+   or a live queue that re-ranks itself as sites are located?
+7. What should `VOTES_TOTAL` be (9 or 12), and is a wider-area mark needed?
 8. What rule should count a narrowed record as located (share of weight on one cell,
-   number of marked cells)? Should weights be three levels or five?
+   number of marked cells)?
 9. If the final model is not niche-based (e.g. a spatial smoother), the value
    metric needs to change (see "Assumed model objective").
 
