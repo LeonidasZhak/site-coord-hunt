@@ -67,37 +67,32 @@ score_cells <- function(covs, ref_xy, min_ref = 8, metric = "mahalanobis") {
 
 #' Score each record that is not yet located.
 #'
-#' A coarse record is scored over every mask cell in its admin polygon, all
-#' equally likely. A narrowed record is scored over its marked cells only, with
-#' the entomologist's weights, so marking cells shrinks the uncertainty.
-#' `admin`: sf polygons with admin_name; `scores`: SpatRaster from score_cells();
-#' `states`: list from record_states().
+#' A coarse record is scored over its unit's candidate cells, each weighted by the
+#' share of the polygon that falls in it. A narrowed record is scored over its marked
+#' cells with the entomologist's weights, so marking cells shrinks the uncertainty.
+#' `candidates`: table from build_candidates() (unit_id, cell_id, weight);
+#' `scores`: SpatRaster from score_cells(); `states`: list from record_states().
 #' One row per record: n_cells, max_shape, weighted mean_shape, range_shape,
 #' min_mess, and pct_outside (weighted share of cells with MESS < 0).
-record_summary <- function(admin, scores, states) {
+record_summary <- function(candidates, scores, states) {
   recs <- states$records
   todo <- recs[recs$status != "located", , drop = FALSE]
-  poly_vals <- list()                       # one extraction per admin unit
-  unit_vals <- function(u) {
-    if (is.na(u) || !(u %in% admin$admin_name)) return(NULL)
-    if (is.null(poly_vals[[u]])) {
-      poly_vals[[u]] <<- terra::extract(scores, terra::vect(admin[admin$admin_name == u, ]), ID = FALSE)
-    }
-    poly_vals[[u]]
-  }
+  by_unit <- split(candidates[, c("cell_id", "weight")], candidates$unit_id)
   rows <- lapply(seq_len(nrow(todo)), function(k) {
     r <- todo[k, ]
     if (r$status == "narrowed") {
       cc <- states$cells[states$cells$record_id == r$record_id, , drop = FALSE]
-      v <- terra::extract(scores, cc$cell_id); w <- cc$weight
     } else {
-      v <- unit_vals(r$admin_name); w <- if (is.null(v)) numeric(0) else rep(1, nrow(v))
+      cc <- if (is.na(r$unit_id)) NULL else by_unit[[r$unit_id]]
     }
-    ok <- if (is.null(v)) logical(0) else stats::complete.cases(v)
+    if (is.null(cc)) cc <- data.frame(cell_id = numeric(), weight = numeric())
+    v <- if (nrow(cc)) terra::extract(scores, cc$cell_id) else data.frame(mess = numeric(), shape = numeric())
+    w <- cc$weight
+    ok <- stats::complete.cases(v)
     v <- v[ok, , drop = FALSE]; w <- w[ok]
     n <- nrow(v)
     data.frame(
-      record_id = r$record_id, admin_name = r$admin_name, status = r$status, n_cells = n,
+      record_id = r$record_id, unit_id = r$unit_id, status = r$status, n_cells = n,
       max_shape   = if (n) max(v$shape) else NA_real_,
       mean_shape  = if (n) sum(w * v$shape) / sum(w) else NA_real_,
       range_shape = if (n) diff(range(v$shape)) else NA_real_,
@@ -109,20 +104,21 @@ record_summary <- function(admin, scores, states) {
   do.call(rbind, rows)
 }
 
-#' Roll record scores up to the location ID (what the work list is ordered by).
-#' A location is as valuable as its most valuable record. `records` is
-#' states$records; the date span covers the location's unlocated records.
-unit_summary <- function(rec_sum, records) {
+#' Roll record scores up to the unit (what the work list is ordered by). A unit is as
+#' valuable as its most valuable record. `records` is states$records; `units` is the
+#' units table (for display names); the date span covers the unit's unlocated records.
+unit_summary <- function(rec_sum, records, units) {
   if (nrow(rec_sum) == 0) return(data.frame())
-  rs <- rec_sum[rec_sum$n_cells > 0 & !is.na(rec_sum$admin_name), , drop = FALSE]
+  rs <- rec_sum[rec_sum$n_cells > 0 & !is.na(rec_sum$unit_id), , drop = FALSE]
   todo <- records[records$status != "located", , drop = FALSE]
-  rows <- lapply(unique(rs$admin_name), function(u) {
-    x <- rs[rs$admin_name == u, ]
+  rows <- lapply(unique(rs$unit_id), function(u) {
+    x <- rs[rs$unit_id == u, ]
     data.frame(
-      admin_name  = u,
+      unit_id     = u,
+      unit_name   = units$unit_name[match(u, units$unit_id)],
       n_records   = nrow(x),
       n_narrowed  = sum(x$status == "narrowed"),
-      dates       = date_span_label(todo$date[todo$admin_name %in% u]),
+      dates       = date_span_label(todo$date[todo$unit_id %in% u]),
       n_cells     = max(x$n_cells),
       max_shape   = max(x$max_shape),
       mean_shape  = mean(x$mean_shape),

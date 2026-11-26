@@ -15,15 +15,43 @@ suppressPackageStartupMessages({
 })
 source("R/dates.R")
 source("R/scoring.R")
+source("R/candidates.R")
 source("R/data_io.R")
 
-DATA_DIR  <- getOption("sch.data_dir", "data")
-inputs    <- load_inputs(DATA_DIR)
-covs      <- inputs$covs
-admin     <- inputs$admin
-cell_size <- res(covs)
-grid_sf   <- st_as_sf(as.polygons(covs[[1]] * 0 + 1, dissolve = FALSE))  # one polygon per mask cell
-ext_v     <- as.vector(ext(covs))                                          # xmin, xmax, ymin, ymax
+DATA_DIR   <- getOption("sch.data_dir", "data")
+inputs     <- load_inputs(DATA_DIR)
+covs       <- inputs$covs
+candidates <- inputs$candidates        # unit_id, cell_id, weight: which cells a unit could be in
+units_tbl  <- inputs$units             # unit_id, unit_name, ...
+admin      <- inputs$admin             # unit outlines for the map only (NULL if absent)
+cell_size  <- res(covs)
+ext_v      <- as.vector(ext(covs))     # xmin, xmax, ymin, ymax
+
+# The model grid is drawn only for the part of the map in view, and only when that is
+# a manageable number of cells: drawing every cell of a large study area would swamp
+# the browser. Zoomed out too far, the user is asked to zoom in.
+MAX_GRID_CELLS <- getOption("sch.max_grid_cells", 6000)
+grid_in_view <- function(b) {
+  if (is.null(b)) return(NULL)
+  r <- tryCatch(crop(covs[[1]], ext(b$west, b$east, b$south, b$north), snap = "out"),
+                error = function(e) NULL)
+  if (is.null(r) || ncell(r) > MAX_GRID_CELLS) return(NULL)
+  g <- as.polygons(r * 0 + 1, dissolve = FALSE)     # NA (outside the mask) cells are dropped
+  if (nrow(g) == 0) NULL else st_as_sf(g)
+}
+
+# Cells a unit could be in, as centres, and the box around them (to zoom to).
+unit_cells <- function(u) {
+  cc <- candidates$cell_id[candidates$unit_id == u]
+  if (length(cc) == 0) return(NULL)
+  xyFromCell(covs[[1]], cc)
+}
+unit_bbox <- function(u) {
+  xy <- unit_cells(u); if (is.null(xy)) return(NULL)
+  half <- cell_size / 2
+  c(xmin = min(xy[, 1]) - half[1], xmax = max(xy[, 1]) + half[1],
+    ymin = min(xy[, 2]) - half[2], ymax = max(xy[, 2]) + half[2])
+}
 
 # A map on a hidden tab has no size, so when its tab is first shown the map must
 # re-measure itself and fit the study area. Done in JS, after the pane is visible.
@@ -55,7 +83,7 @@ SITE_BLUE <- "#08519c"; FLAG_ORANGE <- "#d95f02"; MARK_RED <- "#e41a1c"; NARROW_
 draw_sites <- function(proxy, r, flagged, radius = 4) {
   if (nrow(r) == 0) return(proxy)
   col <- ifelse(r$record_id %in% flagged, FLAG_ORANGE, SITE_BLUE)
-  lab <- sprintf("%s (%s)%s%s", r$record_id, ifelse(is.na(r$admin_name), "no location name", r$admin_name),
+  lab <- sprintf("%s (%s)%s%s", r$record_id, ifelse(is.na(r$unit_name), "no location name", r$unit_name),
                  ifelse(r$exact, "", ", known to its cell"),
                  ifelse(r$record_id %in% flagged, ", flagged", ""))
   pts <- which(r$exact); cel <- which(!r$exact)
@@ -111,7 +139,7 @@ ui <- navbarPage(
       h4("Check a located site"),
       uiOutput("flag_ui_e")
     ),
-    mainPanel(width = 8, leafletOutput("map_e", height = 760))
+    mainPanel(width = 8, leafletOutput("map_e", height = 760), uiOutput("grid_hint_e"))
   )),
 
   tabPanel("Modeller", value = "model", sidebarLayout(
@@ -136,6 +164,7 @@ ui <- navbarPage(
     mainPanel(
       width = 8,
       leafletOutput("map_m", height = 520),
+      uiOutput("grid_hint_m"),
       tabsetPanel(
         tabPanel("Flagged sites",
                  br(), DTOutput("flag_table_m"),
@@ -156,7 +185,8 @@ server <- function(input, output, session) {
   flags       <- reactiveVal(read_flags(DATA_DIR))
   flagged_ids <- reactive(current_flags(flags()))
   states      <- reactive(record_states(inputs$records, corrections(), covs,
-                                        located_share = input$located_share / 100))
+                                        located_share = input$located_share / 100,
+                                        candidates = candidates))
 
   scores <- reactive({
     lyrs <- input$layers
@@ -164,12 +194,12 @@ server <- function(input, output, session) {
     ref <- reference_xy(states(), flagged_ids(), isTRUE(input$exclude_flagged))
     tryCatch(score_cells(covs[[lyrs]], ref), error = function(e) e)
   })
-  rec_sum <- reactive({ s <- scores(); req(!inherits(s, "error")); record_summary(admin, s, states()) })
+  rec_sum <- reactive({ s <- scores(); req(!inherits(s, "error")); record_summary(candidates, s, states()) })
   units <- reactive({
-    u <- unit_summary(rec_sum(), states()$records)
+    u <- unit_summary(rec_sum(), states()$records, units_tbl)
     if (!nrow(u)) return(u)
     key <- if (input$metric == "shape") u$max_shape else u$pct_outside
-    u[order(-key, -u$max_shape, u$admin_name), , drop = FALSE]
+    u[order(-key, -u$max_shape, u$unit_name), , drop = FALSE]
   })
 
   # The entomologist's work list. Its order comes from the modeller's scores, but
@@ -177,13 +207,16 @@ server <- function(input, output, session) {
   # fieldwork is never blocked by a modelling problem.
   worklist <- reactive({
     if (!inherits(scores(), "error")) return(units())
-    r <- states()$records; r <- r[r$status != "located" & !is.na(r$admin_name), , drop = FALSE]
+    r <- states()$records
+    r <- r[r$status != "located" & !is.na(r$unit_id) & r$unit_id %in% candidates$unit_id, , drop = FALSE]
     if (!nrow(r)) return(data.frame())
-    u <- sort(unique(r$admin_name))
-    data.frame(admin_name = u,
-               n_records  = vapply(u, function(x) sum(r$admin_name == x), 1L),
-               n_narrowed = vapply(u, function(x) sum(r$admin_name == x & r$status == "narrowed"), 1L),
-               dates      = vapply(u, function(x) date_span_label(r$date[r$admin_name == x]), ""),
+    nm <- units_tbl$unit_name[match(unique(r$unit_id), units_tbl$unit_id)]
+    u <- unique(r$unit_id)[order(nm)]
+    data.frame(unit_id    = u,
+               unit_name  = units_tbl$unit_name[match(u, units_tbl$unit_id)],
+               n_records  = vapply(u, function(x) sum(r$unit_id == x), 1L),
+               n_narrowed = vapply(u, function(x) sum(r$unit_id == x & r$status == "narrowed"), 1L),
+               dates      = vapply(u, function(x) date_span_label(r$date[r$unit_id == x]), ""),
                stringsAsFactors = FALSE)
   })
 
@@ -208,7 +241,7 @@ server <- function(input, output, session) {
   unit_now <- reactive({
     u <- current_unit()
     w <- worklist()
-    if (!is.null(u) && nrow(w) && u %in% w$admin_name) u else NULL
+    if (!is.null(u) && nrow(w) && u %in% w$unit_id) u else NULL
   })
 
   output$status_e <- renderUI({
@@ -223,10 +256,10 @@ server <- function(input, output, session) {
     w <- worklist(); req(nrow(w) > 0)
     # Keep the chosen location selected when the list re-renders after a save.
     cu <- isolate(current_unit())
-    sel <- if (is.null(cu)) NA_integer_ else match(cu, w$admin_name)
+    sel <- if (is.null(cu)) NA_integer_ else match(cu, w$unit_id)
     selection <- list(mode = "single")
     if (!is.na(sel)) selection$selected <- sel
-    data.frame(Location = w$admin_name, Records = w$n_records,
+    data.frame(Location = w$unit_name, Records = w$n_records,
                Dates = w$dates, Narrowed = w$n_narrowed) |>
       datatable(selection = selection, rownames = FALSE,
                 options = list(pageLength = 8, dom = "tp", ordering = FALSE, scrollX = TRUE))
@@ -234,16 +267,17 @@ server <- function(input, output, session) {
   observeEvent(input$unit_table_e_rows_selected, {
     i <- input$unit_table_e_rows_selected
     w <- worklist()
-    if (!is.null(i) && i <= nrow(w)) current_unit(w$admin_name[i])
+    if (!is.null(i) && i <= nrow(w)) current_unit(w$unit_id[i])
   })
 
   output$record_picker_e <- renderUI({
     u <- unit_now()
     if (is.null(u)) return(helpText("Select a location in the list."))
-    r <- states()$records; r <- r[r$status != "located" & r$admin_name %in% u, , drop = FALSE]
+    r <- states()$records; r <- r[r$status != "located" & r$unit_id %in% u, , drop = FALSE]
     lab <- sprintf("%s (%s%s)", r$record_id, unname(vapply(r$date, date_span_label, "")),
                    ifelse(r$status == "narrowed", ", narrowed", ""))
-    selectInput("record_e", sprintf("Record at %s", u), setNames(r$record_id, lab),
+    selectInput("record_e", sprintf("Record at %s", units_tbl$unit_name[match(u, units_tbl$unit_id)]),
+                setNames(r$record_id, lab),
                 selected = isolate(input$record_e))
   })
 
@@ -267,7 +301,7 @@ server <- function(input, output, session) {
   # throwing away wherever the user had zoomed to.
   observeEvent(current_unit(), {
     u <- current_unit(); req(u)
-    b <- st_bbox(admin[admin$admin_name == u, ])
+    b <- unit_bbox(u); req(b)
     leafletProxy("map_e") |> fitBounds(b[["xmin"]], b[["ymin"]], b[["xmax"]], b[["ymax"]])
   })
 
@@ -332,16 +366,14 @@ server <- function(input, output, session) {
   output$pending_e <- renderUI({
     chk <- pending_check(); pc <- pend_cells()
     if (!chk$ok) return(helpText(chk$msg))
-    u <- inputs$records$admin_name[match(input$record_e, inputs$records$record_id)]
-    poly <- admin[admin$admin_name %in% u, ]
-    pts <- if (input$mode_e == "point" && !is.null(pend_point())) matrix(pend_point(), 1) else as.matrix(pc[, c("lon", "lat")])
-    inside <- nrow(poly) == 0 || all(vapply(seq_len(nrow(pts)), function(i)
-      length(st_intersects(poly, st_sfc(st_point(pts[i, ]), crs = st_crs(admin)))[[1]]) > 0, TRUE))
+    u <- inputs$records$unit_id[match(input$record_e, inputs$records$record_id)]
+    could_be <- candidates$cell_id[candidates$unit_id == u]
+    inside <- length(could_be) == 0 || all(pc$cell_id %in% could_be)
     tagList(
       helpText(sprintf("Ready to save %d cell%s.", nrow(pc), if (nrow(pc) == 1) "" else "s")),
       if (!inside) div(class = "text-warning",
                        sprintf("Part of this is outside %s, the location recorded for %s. Save only if that name was wrong.",
-                               u, input$record_e)))
+                               units_tbl$unit_name[match(u, units_tbl$unit_id)], input$record_e)))
   })
 
   # ---- map ------------------------------------------------------------------
@@ -350,20 +382,37 @@ server <- function(input, output, session) {
   output$map_e <- renderLeaflet(base_map())
   outputOptions(output, "map_e", suspendWhenHidden = FALSE)
 
-  observe({   # grid: orientation only
-    leafletProxy("map_e") |> clearGroup("grid") |>
-      addPolygons(data = grid_sf, group = "grid", fill = FALSE, color = "#555", weight = 0.4,
-                  options = pathOptions(interactive = FALSE))
+  bounds_e <- debounce(reactive(input$map_e_bounds), 300)
+  grid_e   <- reactive(grid_in_view(bounds_e()))
+  observe({   # grid: orientation only, for the cells in view
+    g <- grid_e(); p <- leafletProxy("map_e") |> clearGroup("grid")
+    if (!is.null(g))
+      p |> addPolygons(data = g, group = "grid", fill = FALSE, color = "#555", weight = 0.4,
+                       options = pathOptions(interactive = FALSE))
   })
+  output$grid_hint_e <- renderUI(if (!is.null(bounds_e()) && is.null(grid_e()))
+    helpText("Zoom in to see the model grid."))
 
-  observe({   # location outlines, the selected one emphasised
-    u <- unit_now()
+  observe({   # location outlines (if there is an outline layer), the selected one emphasised
+    u <- unit_now(); req(!is.null(admin))
     p <- leafletProxy("map_e") |> clearGroup("units") |>
       addPolygons(data = admin, group = "units", fill = FALSE, color = "#888", weight = 1,
-                  label = ~admin_name, options = pathOptions(interactive = FALSE))
+                  label = ~unit_name, options = pathOptions(interactive = FALSE))
     if (!is.null(u))
-      p |> addPolygons(data = admin[admin$admin_name == u, ], group = "units", fill = FALSE,
+      p |> addPolygons(data = admin[admin$unit_id == u, ], group = "units", fill = FALSE,
                        color = FLAG_ORANGE, weight = 3, options = pathOptions(interactive = FALSE))
+  })
+
+  observe({   # the cells the chosen location could be in (geometry only: no scores)
+    u <- unit_now()
+    p <- leafletProxy("map_e") |> clearGroup("candidates")
+    xy <- if (is.null(u)) NULL else unit_cells(u)
+    if (!is.null(xy)) {
+      half <- cell_size / 2
+      p |> addRectangles(xy[, 1] - half[1], xy[, 2] - half[2], xy[, 1] + half[1], xy[, 2] + half[2],
+                         group = "candidates", color = FLAG_ORANGE, weight = 1, fillOpacity = 0.05,
+                         options = pathOptions(interactive = FALSE))
+    }
   })
 
   observe({   # sites that are already located
@@ -465,7 +514,8 @@ server <- function(input, output, session) {
     id <- selected_site()
     if (is.null(id)) return(helpText("Click a located site on the map (a blue dot or square) to check it. Orange sites have been flagged."))
     r <- states()$records[states()$records$record_id == id, ]
-    head <- p(strong(id), sprintf("at %s, %s", r$admin_name, date_span_label(r$date)))
+    head <- p(strong(id), sprintf("at %s, %s", ifelse(is.na(r$unit_name), "an unnamed location", r$unit_name),
+                                  date_span_label(r$date)))
     if (id %in% flagged_ids())
       return(tagList(head, div(class = "text-warning", "Flagged as possibly wrong.")))
     tagList(head,
@@ -490,19 +540,28 @@ server <- function(input, output, session) {
   # Modeller view: scores, ranking, reference set, flags.
   # ===========================================================================
   output$status_m <- renderUI({
-    s <- scores(); r <- states()$records; um <- unmatched_names(r, admin)
+    s <- scores(); r <- states()$records
+    pr <- unit_problems(r, units_tbl, candidates); np <- inputs$record_problems
     ref <- reference_xy(states(), flagged_ids(), isTRUE(input$exclude_flagged))
+    auto <- sum(r$basis %in% "single candidate cell")
     tagList(
       p(sprintf("%d located, %d narrowed, %d coarse. %d in the reference set; %d flagged.",
                 sum(r$status == "located"), sum(r$status == "narrowed"), sum(r$status == "coarse"),
                 nrow(ref), length(flagged_ids()))),
+      if (auto > 0) helpText(sprintf("%d of the located records were placed automatically: their unit covers a single cell.", auto)),
       if (inherits(s, "error")) div(class = "text-danger", conditionMessage(s)),
-      if (length(um)) div(class = "text-warning", paste("Names with no matching polygon:", toString(um))))
+      if (nrow(np)) div(class = "text-warning",
+                        sprintf("%d record%s could not be matched to a unit (name unknown or ambiguous) and %s left out.",
+                                nrow(np), if (nrow(np) == 1) "" else "s", if (nrow(np) == 1) "is" else "are")),
+      if (length(pr$unknown)) div(class = "text-warning", paste("Units not in units.csv:", toString(pr$unknown))),
+      if (length(pr$no_cells)) div(class = "text-warning",
+                                   paste("Units with no cells in the mask (their records cannot be ranked):",
+                                         toString(units_tbl$unit_name[match(pr$no_cells, units_tbl$unit_id)]))))
   })
 
   output$unit_table_m <- renderDT({
     u <- units(); req(nrow(u) > 0)
-    u[, c("admin_name", "n_records", "n_narrowed", "dates", "max_shape", "mean_shape",
+    u[, c("unit_name", "n_records", "n_narrowed", "dates", "max_shape", "mean_shape",
           "range_shape", "pct_outside")] |>
       datatable(selection = "single", rownames = FALSE,
                 colnames = c("Location", "Records", "Narrowed", "Dates", "Max SHAPE", "Mean SHAPE",
@@ -513,7 +572,7 @@ server <- function(input, output, session) {
   current_unit_m <- reactiveVal(NULL)
   observeEvent(input$unit_table_m_rows_selected, {
     i <- input$unit_table_m_rows_selected; u <- units()
-    if (!is.null(i) && i <= nrow(u)) current_unit_m(u$admin_name[i])
+    if (!is.null(i) && i <= nrow(u)) current_unit_m(u$unit_id[i])
   })
 
   output$map_m <- renderLeaflet(base_map())
@@ -542,12 +601,16 @@ server <- function(input, output, session) {
       addLegend("bottomright", pal = pal, values = c(lo, hi), title = ttl, layerId = "legend")
   })
 
+  bounds_m <- debounce(reactive(input$map_m_bounds), 300)
+  grid_m   <- reactive(grid_in_view(bounds_m()))
   observe({
-    p <- leafletProxy("map_m") |> clearGroup("grid")
-    if (isTRUE(input$show_grid_m))
-      p |> addPolygons(data = grid_sf, group = "grid", fill = FALSE, color = "#555", weight = 0.4,
+    g <- grid_m(); p <- leafletProxy("map_m") |> clearGroup("grid")
+    if (isTRUE(input$show_grid_m) && !is.null(g))
+      p |> addPolygons(data = g, group = "grid", fill = FALSE, color = "#555", weight = 0.4,
                        options = pathOptions(interactive = FALSE))
   })
+  output$grid_hint_m <- renderUI(if (isTRUE(input$show_grid_m) && !is.null(bounds_m()) && is.null(grid_m()))
+    helpText("Zoom in to see the model grid."))
 
   observe({
     st <- states(); u <- units(); fl <- flagged_ids()
@@ -562,24 +625,36 @@ server <- function(input, output, session) {
                               weight = 1, fillOpacity = 0.7,
                               label = sprintf("%s: marked cell, weight %.0f%%", st$cells$record_id, st$cells$weight * 100))
     }
-    if (nrow(u)) {
-      a <- merge(admin, u, by = "admin_name")
+    if (nrow(u) && !is.null(admin)) {
+      a <- merge(admin[, "unit_id"], u, by = "unit_id")
       p |> addPolygons(data = a, group = "units", fill = FALSE, color = FLAG_ORANGE, weight = 2,
-                       label = ~sprintf("%s: %d unlocated, max SHAPE %.0f", admin_name, n_records, max_shape))
+                       label = ~sprintf("%s: %d unlocated, max SHAPE %.0f", unit_name, n_records, max_shape))
     }
   })
 
   observeEvent(current_unit_m(), {
     u <- current_unit_m(); req(u)
-    b <- st_bbox(admin[admin$admin_name == u, ])
+    b <- unit_bbox(u); req(b)
     leafletProxy("map_m") |> fitBounds(b[["xmin"]], b[["ymin"]], b[["xmax"]], b[["ymax"]])
+  })
+
+  observe({   # the cells the selected unit could be in
+    u <- current_unit_m()
+    p <- leafletProxy("map_m") |> clearGroup("candidates")
+    xy <- if (is.null(u)) NULL else unit_cells(u)
+    if (!is.null(xy)) {
+      half <- cell_size / 2
+      p |> addRectangles(xy[, 1] - half[1], xy[, 2] - half[2], xy[, 1] + half[1], xy[, 2] + half[2],
+                         group = "candidates", color = "#000", weight = 1, fillOpacity = 0,
+                         options = pathOptions(interactive = FALSE))
+    }
   })
 
   flag_rows <- reactive({
     f <- flags(); ids <- flagged_ids()
     f <- f[f$action == "flag" & f$record_id %in% ids, , drop = FALSE]
     f <- f[!duplicated(f$record_id, fromLast = TRUE), , drop = FALSE]
-    f$location <- inputs$records$admin_name[match(f$record_id, inputs$records$record_id)]
+    f$location <- inputs$records$unit_name[match(f$record_id, inputs$records$record_id)]
     f
   })
   output$flag_table_m <- renderDT({

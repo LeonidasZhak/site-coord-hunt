@@ -14,10 +14,13 @@ change), **working default** (accepted for now, easy to change), **open**.
 | 2 | The model mask is a raster file, and its cells are the grid. | It ties cells directly to the covariate stack. | decided |
 | 2a | The mask is fixed: the maximal extent of the project, with every resource masked and aligned to it. | Cell IDs are then stable, so they can be stored and used directly without checking for a changing grid. | decided |
 | 3 | Novelty is measured with MESS and SHAPE (Velazco et al.), shown side by side. SHAPE ranks; MESS < 0 flags "outside the observed range of at least one covariate". | MESS cannot see unusual combinations of covariates that are each in range; SHAPE can. | decided |
-| 4 | A coarse record is scored cell by cell within its polygon, then summarised (max, mean, range). | The spread inside a polygon is the point: a polygon with one very novel cell and many ordinary ones is different from a uniformly ordinary one. | decided |
+| 4 | A coarse record is scored cell by cell over its unit's candidate cells, then summarised (max, weighted mean, range). | The spread inside a polygon is the point: a polygon with one very novel cell and many ordinary ones is different from a uniformly ordinary one. | decided |
 | 5 | Scores are recomputed whenever a site is located. A "next best" ranking that down-weights similar candidates is planned. | Each located site changes the novelty of every other candidate; without this, effort goes to adjacent parishes that are all novel in the same way. | recompute: built; next best: not built |
 | 5a | The modeller chooses which covariates feed the scores. | Not every covariate in a data pack belongs in the model. | built |
-| 6 | Coarse records are joined to admin polygons by name. | Simplest start. Facility names often will not match, so they may need a lookup with a point and radius. | assumed; open for facilities |
+| 6 | Approximate locations are polygons, converted once to a candidate table (`unit_id`, `cell_id`, `weight`). Units can overlap, and records point to a unit by id. Where only names exist, they are matched to units; unknown or ambiguous names are reported, never guessed. | Matching by name silently merged two polygons that shared a name, and the polygon layer would be re-read on every score. A table is many-to-many, so a facility catchment inside a parish works, and it makes the overlap rule explicit. | decided; built |
+| 6a | Weight = the share of the polygon's area in each cell (uniform within the polygon), normalised over mask cells. | The best we can say without more information is that the sample is equally likely anywhere in the polygon. Habitat could refine it later. | decided; built |
+| 6b | A unit whose polygon covers exactly one mask cell has its records located at that cell automatically, and they join the reference set. | Nothing is left to resolve; asking an entomologist to click the only possible cell wastes their time. An entomologist's own mark still takes precedence. | decided; built |
+| 6c | The model grid is drawn only for the cells in view, and only when that is a manageable number. | Drawing every cell of a real study area would swamp the browser (about 18 MB for 90,000 cells). | decided; built |
 
 ## Two people, one app
 
@@ -56,6 +59,8 @@ change), **working default** (accepted for now, easy to change), **open**.
 
 ## Not yet decided
 
-See "Open questions" in [DESIGN.md](DESIGN.md): facility names,
+The ranking: a unit is currently ranked by its best candidate cell, which favours large polygons (a district will outrank a village), and nested levels make that worse. The mean is the expected novelty. Which to rank by is undecided.
+
+See "Open questions" in [DESIGN.md](DESIGN.md): facilities that are only a point and a radius,
 covariate subset, whether records from one unit and date are one site, acceptable
 precision, and what changes if the model is not niche-based.
