@@ -8,17 +8,43 @@ FLAG_COLS <- c("action", "record_id", "user", "timestamp", "note")
 
 # ---- inputs -----------------------------------------------------------------
 
+#' Read the project's inputs.
+#'   covariates.tif  fixed model mask and covariates (cell IDs are stable)
+#'   candidates.csv  unit_id, cell_id, weight   (built by data-raw/build_candidates.R)
+#'   units.csv       unit_id, unit_name, layer, n_cells, mask_share
+#'   records.csv     record_id, unit_id (or admin_name), lon, lat, n_specimens, date
+#'   admin.gpkg      unit outlines for the map, with a unit_id column (optional)
 load_inputs <- function(dir = "data") {
-  records <- utils::read.csv(
-    file.path(dir, "records.csv"), stringsAsFactors = FALSE,
-    na.strings = c("", "NA"),
-    colClasses = c(record_id = "character", admin_name = "character", date = "character"))
+  need <- c("covariates.tif", "candidates.csv", "units.csv", "records.csv")
+  missing <- need[!file.exists(file.path(dir, need))]
+  if (length(missing))
+    stop("Missing in '", dir, "': ", toString(missing),
+         ". candidates.csv and units.csv come from data-raw/build_candidates.R.", call. = FALSE)
+  covs <- terra::rast(file.path(dir, "covariates.tif"))
+  units <- utils::read.csv(file.path(dir, "units.csv"), stringsAsFactors = FALSE,
+                           colClasses = c(unit_id = "character", unit_name = "character", layer = "character"))
+  candidates <- utils::read.csv(file.path(dir, "candidates.csv"), stringsAsFactors = FALSE,
+                                colClasses = c(unit_id = "character"))
+  check_candidates(candidates, units, covs)
+  rec_file <- file.path(dir, "records.csv")
+  cls <- c(record_id = "character", admin_name = "character", unit_id = "character",
+           unit_layer = "character", date = "character")
+  cls <- cls[names(cls) %in% names(utils::read.csv(rec_file, nrows = 0))]
+  records <- utils::read.csv(rec_file, stringsAsFactors = FALSE, na.strings = c("", "NA"), colClasses = cls)
   if (is.null(records$date)) records$date <- NA_character_
-  list(
-    covs    = terra::rast(file.path(dir, "covariates.tif")),
-    admin   = sf::st_read(file.path(dir, "admin.gpkg"), quiet = TRUE),
-    records = records
-  )
+  assigned <- assign_unit_ids(records, units)
+  records <- assigned$records
+  records$unit_name <- units$unit_name[match(records$unit_id, units$unit_id)]
+  admin <- NULL
+  if (file.exists(file.path(dir, "admin.gpkg"))) {
+    admin <- sf::st_read(file.path(dir, "admin.gpkg"), quiet = TRUE)
+    if (!("unit_id" %in% names(admin))) {
+      warning("admin.gpkg has no unit_id column; unit outlines will not be drawn.", call. = FALSE)
+      admin <- NULL
+    }
+  }
+  list(covs = covs, units = units, candidates = candidates, records = records,
+       admin = admin, record_problems = assigned$report)
 }
 
 # ---- corrections: one row per marked cell, grouped by action_id -------------
@@ -131,19 +157,25 @@ current_flags <- function(flags) {
 #'                      `located_share` of the weight (that cell is used);
 #'         "narrowed" - several marked cells, none heavy enough;
 #'         "coarse"   - only the location ID is known.
-#' Returns list(records = records plus `status`, the effective lon/lat, and
-#'                        `exact` (TRUE where lon/lat are a real point, FALSE where
-#'                        they are the centre of the cell, derived from cell_id),
+#' A coarse record whose unit has exactly one candidate cell counts as located there
+#' (`basis` "single candidate cell"): nothing is left for anyone to resolve.
+#' Returns list(records = records plus `status`, the effective lon/lat, `exact`
+#'                        (TRUE where lon/lat are a real point, FALSE where they are the
+#'                        centre of the cell, derived from cell_id), and `basis` (what
+#'                        made it located: record coordinates, entomologist, single
+#'                        candidate cell),
 #'              cells   = marked cells of narrowed records with weights and the
 #'                        derived cell centres).
-record_states <- function(records, corrections, covs, located_share = 0.8) {
+record_states <- function(records, corrections, covs, located_share = 0.8, candidates = NULL) {
   records$status <- "coarse"
   records$exact  <- FALSE
+  records$basis  <- NA_character_
   has_xy <- !is.na(records$lon) & !is.na(records$lat)
   if (any(has_xy)) {
     v <- terra::extract(covs[[1]], as.matrix(records[has_xy, c("lon", "lat")]))
     records$status[has_xy][!is.na(v[[1]])] <- "located"
     records$exact[has_xy][!is.na(v[[1]])]  <- TRUE     # coordinates that came with the record
+    records$basis[has_xy][!is.na(v[[1]])]  <- "record coordinates"
   }
   cells <- data.frame(record_id = character(), cell_id = numeric(),
                       lon = numeric(), lat = numeric(), weight = numeric(),
@@ -160,6 +192,7 @@ record_states <- function(records, corrections, covs, located_share = 0.8) {
     r$lon <- ifelse(is_point, r$lon, xy[, 1])
     r$lat <- ifelse(is_point, r$lat, xy[, 2])
     heavy <- which.max(r$weight)
+    records$basis[i] <- "entomologist"
     if (nrow(r) == 1 || r$weight[heavy] >= located_share - 1e-9) {
       records$status[i] <- "located"
       records$lon[i] <- r$lon[heavy]; records$lat[i] <- r$lat[heavy]
@@ -167,6 +200,21 @@ record_states <- function(records, corrections, covs, located_share = 0.8) {
     } else {
       records$status[i] <- "narrowed"
       cells <- rbind(cells, r[, c("record_id", "cell_id", "lon", "lat", "weight")])
+    }
+  }
+  # A unit whose polygon covers exactly one mask cell has nothing left to resolve: its
+  # records are located at that cell. (An entomologist's own mark always takes precedence.)
+  if (!is.null(candidates) && nrow(candidates)) {
+    n_cand <- table(candidates$unit_id)
+    single <- names(n_cand)[n_cand == 1]
+    auto <- records$status == "coarse" & records$unit_id %in% single
+    if (any(auto)) {
+      cell <- candidates$cell_id[match(records$unit_id[auto], candidates$unit_id)]
+      xy <- terra::xyFromCell(covs[[1]], cell)
+      records$status[auto] <- "located"
+      records$lon[auto] <- xy[, 1]; records$lat[auto] <- xy[, 2]
+      records$exact[auto] <- FALSE
+      records$basis[auto] <- "single candidate cell"
     }
   }
   list(records = records, cells = cells)
@@ -179,11 +227,4 @@ reference_xy <- function(states, flagged_ids, exclude_flagged = TRUE) {
   keep <- r$status == "located"
   if (exclude_flagged) keep <- keep & !(r$record_id %in% flagged_ids)
   r[keep, c("lon", "lat"), drop = FALSE]
-}
-
-#' Admin names in records that do not match any polygon (reported to the user,
-#' never silently dropped).
-unmatched_names <- function(records, admin) {
-  nm <- unique(records$admin_name[!is.na(records$admin_name)])
-  setdiff(nm, admin$admin_name)
 }

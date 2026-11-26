@@ -26,10 +26,16 @@ edge delineation), the value metric changes and this document should be revisite
 
 - **Reference set**: records geolocated at model resolution (a cell, or a point
   that falls in one). Covariates are extracted at these cells.
-- **Coarse record**: a record with only an admin unit (or similar) location. Its
-  candidate cells are the mask cells that fall inside that unit's polygon.
-- **Location ID**: the identifier of the coarse place that records are attributed
-  to (parish, village, facility). In the prototype this is `admin_name`.
+- **Unit**: a coarse place that records can be attributed to (a parish, a facility
+  catchment, a village), identified by a `unit_id`. Units can overlap: a facility
+  catchment can lie inside a parish, and some records are attributed to one and some
+  to the other.
+- **Coarse record**: a record with only a unit as its location.
+- **Candidate cells**: the mask cells a unit could be in, each with a weight (see
+  "Converting polygons to cells").
+- **Single-candidate unit**: a unit whose polygon covers exactly one mask cell. Its
+  records are located at that cell automatically, because there is nothing left to
+  resolve.
 - **Narrowed record**: a coarse record for which the entomologist has marked one
   or more candidate cells, possibly with weights, without pinning it to one cell.
 - **Novelty of a cell**: how far the covariates of that cell lie outside the
@@ -63,10 +69,11 @@ reported per cell, and the modeller can change which one drives the ranking.
 ## From cells to records
 
 A coarse record spans many cells, and we do not know which one is right. For
-every coarse record we score each candidate cell in its polygon, then report:
+every coarse record we score each of its unit's candidate cells, then report:
 
 - `max_novelty`: best-case payoff, i.e. if the true location is the most novel cell
-- `mean_novelty`: expected payoff if all cells are equally likely
+- `mean_novelty`: expected payoff, the mean over candidate cells weighted by how
+  likely each is (the share of the polygon in it)
 - `range`: how much the answer depends on where the record really is
   (`max - min`)
 - `n_cells`: number of candidate cells
@@ -132,7 +139,9 @@ helps recall:
 - the **time span** of those records as month and year, e.g. "Mar 2018 to Nov
   2021" ("undated" where there is no date, and year only where only a year is known)
 
-The polygon and the model grid are shown for orientation, and so are the sites
+The location's outline and the cells it could be in are shown (geometry only, with no
+scores), the model grid is drawn for the cells in view (zoom in to see it on a large
+study area), and so are the sites
 that are already located (an exact point is drawn as a dot, a site known only to its
 cell as that cell's square, so the map shows what was recorded). Showing located sites helps recall, and the hope is that
 entomologists notice ones that look wrong. For that to be useful there is a **flag
@@ -192,6 +201,30 @@ located, narrowed or still coarse.
 
 Corrections are never written over the original data; see the next section.
 
+## Converting polygons to cells
+
+Approximate locations arrive as polygons. The model works on the raster mask, so each
+unit is converted once to its candidate cells (`data-raw/build_candidates.R`, using
+`R/candidates.R`). The rules, all visible in the output:
+
+- **Weight = the share of the polygon's area that falls in the cell.** This assumes the
+  true location is equally likely anywhere within the polygon (uniform; ignoring
+  habitat, which a later habitat restriction could refine). It is not the fraction of
+  the cell covered: a large polygon has many cells, each covered fully, and they should
+  not all weigh the same as a sliver at the edge.
+- **Normalised over mask cells only.** Weights sum to 1 for each unit. A polygon that
+  extends past the mask (coast, border, lake) keeps only its in-mask part, and
+  `mask_share` records how much that was.
+- **Overlap is allowed.** A cell can be a candidate for many units; the table is
+  many-to-many. Unit ids are unique across layers (a `prefix` per layer).
+- **Small polygons are not dropped.** A polygon smaller than a cell still gets the
+  cell(s) it touches, with weights in proportion to its area in each. If that is one
+  cell, the unit is a single-candidate unit.
+- **Problems are listed, never dropped silently:** units with no cells in the mask,
+  units mostly outside it, and invalid geometries (repaired and reported). The Modeller
+  tab also lists records whose unit is unknown or has no cells.
+- **The mask is fixed**, so the cell IDs in the table stay valid.
+
 ## Data
 
 All inputs are plain files so the repo runs without a database. The storage layer
@@ -202,13 +235,21 @@ database later.
   grid is the cell structure of this raster. The mask is fixed: it is the maximal
   extent of the project, and every resource is masked and aligned to it, so cell IDs
   are stable and can be stored and used directly.
-- `admin.gpkg`: admin polygons with `admin_id` and `admin_name`.
+- `candidates.csv`: `unit_id`, `cell_id`, `weight`. Which mask cells each unit could be
+  in, and how likely each is. Built from the polygon layers by
+  `data-raw/build_candidates.R`. The app refuses a table that does not fit the mask
+  (cell IDs outside the raster, cells outside the mask, weights that do not sum to 1
+  for a unit, a unit missing from `units.csv`).
+- `units.csv`: `unit_id`, `unit_name`, `layer`, `n_cells`, `mask_share` (the share of
+  the polygon inside the mask).
+- `admin.gpkg`: the unit outlines, with a `unit_id` column, for drawing on the map
+  only. Nothing is scored from it.
 - `records.csv`: one row per record.
 
 | Column | Meaning |
 |---|---|
 | `record_id` | unique id |
-| `admin_name` | name of the coarse unit, joined to the polygon layer |
+| `unit_id` | the unit the record is attributed to. Where the source data has only names, give `admin_name` instead (and `unit_layer` if the same name occurs in more than one layer); the app matches names to units, and reports any that match none or more than one, never guessing |
 | `lon`, `lat` | precise coordinates; blank if not yet located |
 | `n_specimens` | optional, count |
 | `date` | recommended: shown in the entomologist view as month and year; partial dates (year only, or year and month) are accepted |
@@ -243,14 +284,18 @@ are reported, not silently dropped.
 The first prototype runs on simulated covariates, admin units and records
 (`data-raw/simulate_data.R`), so the repo needs no private data. The simulation
 deliberately includes a few admin units that cover unusual environmental
-conditions, so the ranking has something to find. Record dates are simulated with the
+conditions, so the ranking has something to find. There are two layers of units: 36
+parishes that line up with the grid, and 8 facility catchments that do not and that
+overlap the parishes. Two catchments are smaller than a cell, so their records are
+placed automatically. Record dates are simulated with the
 mix of precision real records have (full dates, month only, year only, and a few
 missing).
 
 ## Open questions
 
-1. Do admin names match a boundary layer cleanly? Facility names usually do not, and
-   may need a lookup table with a point and a catchment radius.
+1. Real names may match the polygon layers imperfectly. Unmatched and ambiguous names
+   are now reported, but facilities that exist only as a point (with a catchment
+   radius) still need converting to polygons, for example by buffering.
 2. Should novelty be computed against all covariates in the model, or a chosen subset?
 3. Do records from the same unit and date describe one site, or several?
 4. What is an acceptable georeferencing precision (cell centre vs. point), and does

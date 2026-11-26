@@ -40,8 +40,10 @@ source("data-raw/simulate_data.R")  # once; writes simulated data/ files
 shiny::runApp()
 ```
 
-To use real data, put `covariates.tif`, `admin.gpkg` and `records.csv` in a
-folder (formats in DESIGN.md) and run
+To use real data you need the fixed mask (`covariates.tif`), your records, and your
+polygon layers converted to cells. Edit and run `data-raw/build_candidates.R` to write
+`candidates.csv`, `units.csv` and `admin.gpkg` (the units' outlines); then put those
+with `covariates.tif` and `records.csv` in a folder (formats in DESIGN.md) and run
 `options(sch.data_dir = "path/to/folder"); shiny::runApp()`.
 Geolocations are appended to `corrections.csv` and flags to `flags.csv` in that folder;
 the original `records.csv` is never modified. Dates in `records.csv` may be a full date,
@@ -51,6 +53,7 @@ a month (`2019-04`), a year (`2019`) or blank.
 
 ```bash
 Rscript tests/test_dates.R
+Rscript tests/test_candidates.R
 Rscript tests/test_scoring.R
 Rscript tests/test_data_io.R
 ```
@@ -65,7 +68,9 @@ The prototype runs on simulated data.
 | MESS and SHAPE scoring against located sites, with a choice of covariates | Sequential "next best" selection |
 | Work list by location with record count and month-and-year span | Re-locating a flagged site |
 | Click a cell, drag a point, or mark several cells (even split or manual percentages) | Habitat restriction of candidate cells |
-| Scoring of narrowed records over their marked cells | Facility or point-and-radius records |
+| Scoring of narrowed records over their marked cells | Facilities that are only a point and a radius (they need converting to polygons first) |
+| Polygons converted to weighted candidate cells; overlapping units; automatic placement of single-cell units | |
+| Unmatched or ambiguous names reported, never guessed | |
 | Located sites shown to entomologists, flagging, modeller review | Multi-user storage |
 | Append-only corrections and flags logs; recompute after each save | |
 | Simulated data (with dates) and tests | |
