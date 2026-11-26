@@ -48,6 +48,35 @@ base_map <- function() {
 
 SITE_BLUE <- "#08519c"; FLAG_ORANGE <- "#d95f02"; MARK_RED <- "#e41a1c"; NARROW_PURPLE <- "#6a3d9a"
 
+# Draw located sites so that what is shown matches what was recorded: an exact
+# point is a dot; a site known only to its cell is that cell's square (a dot at the
+# cell centre would look like a point someone had placed). `r` is the located
+# records from record_states(), with `exact`.
+draw_sites <- function(proxy, r, flagged, radius = 4) {
+  if (nrow(r) == 0) return(proxy)
+  col <- ifelse(r$record_id %in% flagged, FLAG_ORANGE, SITE_BLUE)
+  lab <- sprintf("%s (%s)%s%s", r$record_id, ifelse(is.na(r$admin_name), "no location name", r$admin_name),
+                 ifelse(r$exact, "", ", known to its cell"),
+                 ifelse(r$record_id %in% flagged, ", flagged", ""))
+  pts <- which(r$exact); cel <- which(!r$exact)
+  if (length(pts))
+    proxy <- proxy |> addCircleMarkers(
+      lng = r$lon[pts], lat = r$lat[pts], radius = radius, group = "sites",
+      layerId = r$record_id[pts], stroke = TRUE, weight = 2, fillOpacity = 1,
+      color = col[pts], fillColor = col[pts], label = lab[pts],
+      options = pathOptions(bubblingMouseEvents = FALSE))
+  if (length(cel)) {
+    half <- cell_size / 2
+    proxy <- proxy |> addRectangles(
+      lng1 = r$lon[cel] - half[1], lat1 = r$lat[cel] - half[2],
+      lng2 = r$lon[cel] + half[1], lat2 = r$lat[cel] + half[2],
+      group = "sites", layerId = r$record_id[cel], color = col[cel], fillColor = col[cel],
+      weight = 1.5, fillOpacity = 0.9, label = lab[cel],
+      options = pathOptions(bubblingMouseEvents = FALSE))
+  }
+  proxy
+}
+
 # ---- UI ---------------------------------------------------------------------
 
 ui <- navbarPage(
@@ -339,15 +368,7 @@ server <- function(input, output, session) {
 
   observe({   # sites that are already located
     r <- states()$records; r <- r[r$status == "located", , drop = FALSE]
-    fl <- flagged_ids()
-    p <- leafletProxy("map_e") |> clearGroup("sites")
-    if (nrow(r))
-      p |> addCircleMarkers(data = r, lng = ~lon, lat = ~lat, radius = 4, group = "sites",
-                            layerId = ~record_id, stroke = TRUE, weight = 2, fillOpacity = 1,
-                            color = ifelse(r$record_id %in% fl, FLAG_ORANGE, SITE_BLUE),
-                            fillColor = ifelse(r$record_id %in% fl, FLAG_ORANGE, SITE_BLUE),
-                            label = ~sprintf("%s (%s)", record_id, admin_name),
-                            options = pathOptions(bubblingMouseEvents = FALSE))
+    leafletProxy("map_e") |> clearGroup("sites") |> draw_sites(r, flagged_ids())
   })
 
   observe({   # marks already saved for the chosen record
@@ -416,11 +437,13 @@ server <- function(input, output, session) {
       return()
     }
     mode <- input$mode_e; pc <- pend_cells()
-    lon <- pc$lon; lat <- pc$lat
-    if (mode == "point") { lon <- pend_point()[1]; lat <- pend_point()[2] }
+    # Only an exact point stores coordinates. A marked cell is recorded by its cell
+    # ID alone; its centre is derived wherever it is needed.
+    exact <- mode == "point"
     rows <- data.frame(
       action_id = new_action_id(), record_id = input$record_e, cell_id = pc$cell_id,
-      lon = lon, lat = lat,
+      lon = if (exact) pend_point()[1] else NA_real_,
+      lat = if (exact) pend_point()[2] else NA_real_,
       weight = if (mode == "cells") weights() else 1,
       weight_mode = if (mode == "cells") input$wmode_e else "even",
       method = switch(mode, cell = "cell", point = "point", cells = "cells"),
@@ -433,14 +456,14 @@ server <- function(input, output, session) {
   })
 
   # ---- checking located sites -------------------------------------------------
-  observeEvent(input$map_e_marker_click, {
-    id <- input$map_e_marker_click$id
-    if (!is.null(id) && id %in% inputs$records$record_id) selected_site(id)
-  })
+  # Exact points are markers, cell-level sites are shapes; either can be picked.
+  pick_site <- function(id) if (!is.null(id) && id %in% inputs$records$record_id) selected_site(id)
+  observeEvent(input$map_e_marker_click, pick_site(input$map_e_marker_click$id))
+  observeEvent(input$map_e_shape_click,  pick_site(input$map_e_shape_click$id))
 
   output$flag_ui_e <- renderUI({
     id <- selected_site()
-    if (is.null(id)) return(helpText("Click a located site (blue) on the map to check it. Orange sites have been flagged."))
+    if (is.null(id)) return(helpText("Click a located site on the map (a blue dot or square) to check it. Orange sites have been flagged."))
     r <- states()$records[states()$records$record_id == id, ]
     head <- p(strong(id), sprintf("at %s, %s", r$admin_name, date_span_label(r$date)))
     if (id %in% flagged_ids())
@@ -529,16 +552,16 @@ server <- function(input, output, session) {
   observe({
     st <- states(); u <- units(); fl <- flagged_ids()
     loc <- st$records[st$records$status == "located", , drop = FALSE]
-    p <- leafletProxy("map_m") |> clearGroup("sites") |> clearGroup("units")
-    if (nrow(loc))
-      p <- p |> addCircleMarkers(data = loc, lng = ~lon, lat = ~lat, radius = 3, group = "sites",
-                                 stroke = FALSE, fillOpacity = 1,
-                                 fillColor = ifelse(loc$record_id %in% fl, FLAG_ORANGE, SITE_BLUE),
-                                 label = ~sprintf("%s%s", record_id, ifelse(record_id %in% fl, " (flagged)", "")))
-    if (nrow(st$cells))
-      p <- p |> addCircleMarkers(data = st$cells, lng = ~lon, lat = ~lat, radius = 3, group = "sites",
-                                 stroke = FALSE, fillOpacity = 0.9, fillColor = NARROW_PURPLE,
-                                 label = ~sprintf("%s: marked cell, weight %.0f%%", record_id, weight * 100))
+    p <- leafletProxy("map_m") |> clearGroup("sites") |> clearGroup("units") |>
+      draw_sites(loc, fl, radius = 3)
+    if (nrow(st$cells)) {
+      half <- cell_size / 2
+      p <- p |> addRectangles(lng1 = st$cells$lon - half[1], lat1 = st$cells$lat - half[2],
+                              lng2 = st$cells$lon + half[1], lat2 = st$cells$lat + half[2],
+                              group = "sites", color = NARROW_PURPLE, fillColor = NARROW_PURPLE,
+                              weight = 1, fillOpacity = 0.7,
+                              label = sprintf("%s: marked cell, weight %.0f%%", st$cells$record_id, st$cells$weight * 100))
+    }
     if (nrow(u)) {
       a <- merge(admin, u, by = "admin_name")
       p |> addPolygons(data = a, group = "units", fill = FALSE, color = FLAG_ORANGE, weight = 2,

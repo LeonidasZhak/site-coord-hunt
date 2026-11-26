@@ -13,10 +13,14 @@ chk(length(unmatched_names(inp$records, inp$admin)) == 0, "unexpected unmatched 
 coarse <- st0$records$record_id[st0$records$status == "coarse"]
 a <- coarse[1]; b <- coarse[2]
 cell_xy <- function(cell) { xy <- xyFromCell(covs[[1]], cell); list(lon = xy[1], lat = xy[2]) }
+# Only an exact point carries lon/lat (here: the cell centre, a valid point inside
+# the cell). Cell-level marks are identified by cell_id alone.
 act <- function(id, cells, w, mode = "manual", method = "cells") {
   xy <- lapply(cells, cell_xy)
+  exact <- method == "point"
   data.frame(action_id = new_action_id(), record_id = id, cell_id = cells,
-             lon = sapply(xy, `[[`, "lon"), lat = sapply(xy, `[[`, "lat"),
+             lon = if (exact) sapply(xy, `[[`, "lon") else NA_real_,
+             lat = if (exact) sapply(xy, `[[`, "lat") else NA_real_,
              weight = w, weight_mode = mode, method = method, source = "t",
              confidence = "high", user = "t", timestamp = "x")
 }
@@ -29,6 +33,7 @@ append_correction(act(a, cs[1:2], c(0.5, 0.5), "even"), dir)
 st <- record_states(inp$records, read_corrections(dir), covs)
 chk(st$records$status[st$records$record_id == a] == "narrowed", "50/50 should be narrowed")
 chk(nrow(st$cells) == 2 && all(st$cells$weight == 0.5), "marked cells not kept")
+chk(!anyNA(st$cells$lon) && !anyNA(st$cells$lat), "marked cells should get derived centres")
 
 append_correction(act(b, cs[1:2], c(0.85, 0.15)), dir)
 st <- record_states(inp$records, read_corrections(dir), covs, located_share = 0.8)
@@ -61,7 +66,38 @@ writeLines(c('"record_id","lon","lat","cell_id","method","source","confidence","
            file.path(old, "corrections.csv"))
 lc <- read_corrections(old)
 chk(lc$weight == 1 && nzchar(lc$action_id), "legacy corrections not upgraded")
+chk(is.na(lc$lon) && is.na(lc$lat), "legacy cell-level centres should be blanked on read")
 chk(record_states(inp$records, lc, covs)$records$status[inp$records$record_id == a] == "located", "legacy row should locate")
+
+# cell-level marks store no coordinates; the centre is derived from the cell id
+dc <- tempfile(); dir.create(dc)
+append_correction(act(a, cs[1], 1, "even", "cell"), dc)
+raw <- utils::read.csv(file.path(dc, "corrections.csv"))
+chk(is.na(raw$lon) && is.na(raw$lat), "a cell-only mark must be stored without coordinates")
+stc <- record_states(inp$records, read_corrections(dc), covs)
+ra <- stc$records[stc$records$record_id == a, ]
+chk(ra$status == "located" && !ra$exact, "a cell-level location is located but not exact")
+chk(isTRUE(all.equal(c(ra$lon, ra$lat), unlist(cell_xy(cs[1])), check.attributes = FALSE)),
+    "the centre should be derived from the cell id")
+chk(nrow(reference_xy(stc, character(0))) == 46, "a cell-level site still joins the reference set")
+chk(all(st0$records$exact[st0$records$status == "located"]), "coordinates that came with a record are exact")
+chk(!any(st0$records$exact[st0$records$status != "located"]), "unlocated records are never exact")
+
+# an exact point keeps its own coordinates, which differ from the cell centre
+pt <- act(b, cs[2], 1, "even", "point"); pt$lon <- pt$lon + 0.01; pt$lat <- pt$lat - 0.01
+append_correction(pt, dc)
+stp <- record_states(inp$records, read_corrections(dc), covs)
+rp <- stp$records[stp$records$record_id == b, ]
+chk(rp$status == "located" && rp$exact, "an exact point is located and exact")
+chk(abs(rp$lon - pt$lon) < 1e-9 && abs(rp$lat - pt$lat) < 1e-9, "an exact point must keep its own coordinates")
+
+# the rule is enforced on write
+bad <- act(a, cs[1], 1, "even", "cell"); bad$lon <- 31; bad$lat <- -1
+chk(inherits(tryCatch(append_correction(bad, dc), error = function(e) e), "error"), "a cell mark with coordinates must be refused")
+bad <- act(a, cs[1], 1, "even", "point"); bad$lon <- NA_real_
+chk(inherits(tryCatch(append_correction(bad, dc), error = function(e) e), "error"), "an exact point without coordinates must be refused")
+bad <- act(a, cs[1], 1, "even", "cell"); bad$method <- "centroid"
+chk(inherits(tryCatch(append_correction(bad, dc), error = function(e) e), "error"), "an unknown method must be refused")
 
 # flags: flag, dismiss, flag again
 fdir <- tempfile(); dir.create(fdir)

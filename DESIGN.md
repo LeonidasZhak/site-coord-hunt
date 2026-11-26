@@ -133,7 +133,8 @@ helps recall:
   2021" ("undated" where there is no date, and year only where only a year is known)
 
 The polygon and the model grid are shown for orientation, and so are the sites
-that are already located. Showing located sites helps recall, and the hope is that
+that are already located (an exact point is drawn as a dot, a site known only to its
+cell as that cell's square, so the map shows what was recorded). Showing located sites helps recall, and the hope is that
 entomologists notice ones that look wrong. For that to be useful there is a **flag
 as possibly wrong** action on a located site (a note is optional). Flags go to the
 modeller view. By default flagged sites are left out of the reference set until the
@@ -146,6 +147,8 @@ Re-locating a flagged site is not yet supported: the flag only reaches the model
 For a record in the list, the entomologist can:
 
 1. **Click one cell**: the record is located at model resolution (`method = "cell"`).
+   Only the cell is recorded: no coordinates are stored, and none are shown to the
+   entomologist.
 2. **Click to drop a marker and drag it** to the exact spot: a precise location
    (`method = "point"`), from which the cell is derived.
 3. **Mark several cells** when unsure, then say how belief is spread over them:
@@ -196,7 +199,9 @@ All inputs are plain files so the repo runs without a database. The storage laye
 database later.
 
 - `covariates.tif`: covariate stack (multi-layer GeoTIFF), `NA` = outside the mask. The
-  grid is the cell structure of this raster.
+  grid is the cell structure of this raster. The mask is fixed: it is the maximal
+  extent of the project, and every resource is masked and aligned to it, so cell IDs
+  are stable and can be stored and used directly.
 - `admin.gpkg`: admin polygons with `admin_id` and `admin_name`.
 - `records.csv`: one row per record.
 
@@ -213,7 +218,12 @@ database later.
   `record_id`, `cell_id`, `lon`, `lat`, `weight` (proportion; sums to 1 per
   action), `weight_mode` (`even` or `manual`), `method` (`cell`, `point` or
   `cells`), `source`, `confidence`, `user`, `timestamp`. A single cell or point has
-  `weight = 1`. The current state of a record is its latest action; the original
+  `weight = 1`. **`lon` and `lat` are filled only for an exact point** (`method =
+  point`); a marked cell is identified by `cell_id` alone, so a cell centre is never
+  stored as if it were a measured location. Where the app needs a centre (to score a
+  cell, or to draw it) it derives it from the cell ID, and the file is refused if a
+  cell-level row carries coordinates. Older logs that stored centres are blanked on
+  read. The current state of a record is its latest action; the original
   `records.csv` is never modified, so every edit is auditable and reversible. Files
   written by the first prototype (one row per record, no `action_id` or `weight`)
   are still read, each row counting as a single-cell action.
@@ -239,19 +249,18 @@ missing).
 
 ## Open questions
 
-1. Is the model mask resolution fixed, or should users change it in the app?
-2. Do admin names match a boundary layer cleanly? Facility names usually do not, and
+1. Do admin names match a boundary layer cleanly? Facility names usually do not, and
    may need a lookup table with a point and a catchment radius.
-3. Should novelty be computed against all covariates in the model, or a chosen subset?
-4. Do records from the same unit and date describe one site, or several?
-5. What is an acceptable georeferencing precision (cell centre vs. point), and does
+2. Should novelty be computed against all covariates in the model, or a chosen subset?
+3. Do records from the same unit and date describe one site, or several?
+4. What is an acceptable georeferencing precision (cell centre vs. point), and does
    the entomologist's own certainty need to feed the model as uncertainty?
-6. The work list is a live queue that re-ranks as sites are located (working
+5. The work list is a live queue that re-ranks as sites are located (working
    default). Is that right, or does the modeller need to publish a fixed list?
-7. A narrowed record counts as located once one cell holds at least 80% of the
+6. A narrowed record counts as located once one cell holds at least 80% of the
    weight (working default, a placeholder). What share is right?
-8. How should a flagged site get re-located? Today a flag only reaches the modeller.
-9. If the final model is not niche-based (e.g. a spatial smoother), the value
+7. How should a flagged site get re-located? Today a flag only reaches the modeller.
+8. If the final model is not niche-based (e.g. a spatial smoother), the value
    metric needs to change (see "Assumed model objective").
 
 ## References
