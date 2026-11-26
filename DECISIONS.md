@@ -12,6 +12,7 @@ change), **working default** (accepted for now, easy to change), **open**.
 |---|---|---|---|
 | 1 | Value of a record = how much novel environmental space a precise location would add, relative to the sites already located at model resolution. | For an environmental-niche model, a site in conditions we already sample adds little; one in novel conditions constrains the response curves. | assumed; revisit if the model objective changes |
 | 2 | The model mask is a raster file, and its cells are the grid. | It ties cells directly to the covariate stack. | decided |
+| 2a | The mask is fixed: the maximal extent of the project, with every resource masked and aligned to it. | Cell IDs are then stable, so they can be stored and used directly without checking for a changing grid. | decided |
 | 3 | Novelty is measured with MESS and SHAPE (Velazco et al.), shown side by side. SHAPE ranks; MESS < 0 flags "outside the observed range of at least one covariate". | MESS cannot see unusual combinations of covariates that are each in range; SHAPE can. | decided |
 | 4 | A coarse record is scored cell by cell within its polygon, then summarised (max, mean, range). | The spread inside a polygon is the point: a polygon with one very novel cell and many ordinary ones is different from a uniformly ordinary one. | decided |
 | 5 | Scores are recomputed whenever a site is located. A "next best" ranking that down-weights similar candidates is planned. | Each located site changes the novelty of every other candidate; without this, effort goes to adjacent parishes that are all novel in the same way. | recompute: built; next best: not built |
@@ -37,6 +38,7 @@ change), **working default** (accepted for now, easy to change), **open**.
 | 12 | With several cells, the entomologist chooses an even split or manual percentages. Manual weights always total 100, because the last cell takes the remainder. Weights are stored as proportions. | This replaced a fixed vote budget of 9, which cannot split evenly in two (5/4 reads as a lean) and caps the number of cells. Even split is exact, and auto-balancing means a bad sum never has to be rejected. Proportions avoid 33+33+33=99. | decided |
 | 13 | Overall doubt is the separate confidence field, not the weights. | Weights are normalised to sum to 1, so they cannot carry "I'm not sure about any of this". | decided |
 | 14 | A record with several marked cells is narrowed, not located, and does not join the reference set until one cell holds at least 80% of the weight (a slider for the modeller). A narrowed record is scored over its marked cells with a weighted mean. | We do not know which cell's environment it represents. Scoring over the marked cells shrinks the uncertainty without pretending it is gone. | working default (the 80% share is a placeholder); built |
+| 14a | A mark on a cell stores only the cell ID. Coordinates are stored only for an exact point; centres are derived from the cell ID when needed. A cell-level site is drawn as its cell square and an exact point as a dot. | A dot at a cell centre looks like a point someone placed, and centres in the log look like measured coordinates. Scoring needs only the cell. | decided; built |
 | 15 | Corrections go to an append-only log; the original records file is never modified. A later save for a record replaces the earlier one in full. | Every edit is auditable and reversible, and storage can be swapped without touching the app. | decided (storage: no preference expressed) |
 | 16 | The work list is a live queue that re-ranks as sites are located, not a file the modeller publishes. If scoring is not possible it falls back to A to Z. | Matches decision 5. A published file would go stale after the first save, and a modelling problem should never stop fieldwork. | working default; built |
 
@@ -54,6 +56,6 @@ change), **working default** (accepted for now, easy to change), **open**.
 
 ## Not yet decided
 
-See "Open questions" in [DESIGN.md](DESIGN.md): mask resolution, facility names,
+See "Open questions" in [DESIGN.md](DESIGN.md): facility names,
 covariate subset, whether records from one unit and date are one site, acceptable
 precision, and what changes if the model is not niche-based.
